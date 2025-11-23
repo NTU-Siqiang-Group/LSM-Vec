@@ -21,7 +21,6 @@ public:
         : filePath(path), vectorSize(vecSize), totalVectors(numVectors)
     {
         fileSize = vectorSize * totalVectors * sizeof(float);
-
         fileStream.open(filePath, std::ios::in | std::ios::out | std::ios::binary);
         if (!fileStream.is_open())
         {

@@ -11,10 +11,10 @@
 
 struct Config {
     // --- Index / graph hyper-parameters ---
-    int   M = 16;
-    int   Mmax = 32;
+    int   M = 8;
+    int   Mmax = 16;
     int   Ml = 1;
-    float efConstruction = 200.0f;
+    float efConstruction = 64.0f;
 
     // --- Paths / I/O ---
     std::string db_path;                // required: RocksDB path (directory)
@@ -37,7 +37,7 @@ struct Config {
     std::string groundtruth_file_path;  // groundtruth (.ivecs)
 
     std::string output_path = "output.txt";
-    std::string edge_update_policy = "eager"; // eager|lazy|none
+    std::string edge_update_policy = "eager"; 
 
     // Defaults for suffixes and extensions (kept simple; can be made configurable later)
     std::string input_suffix = "input";
@@ -142,7 +142,7 @@ Short aliases:
 
         // Default vector_file_path to db_path if not provided
         if (cfg.vector_file_path.empty() && !cfg.db_path.empty()) {
-            cfg.vector_file_path = cfg.db_path;
+            cfg.vector_file_path = cfg.db_path + "/vector.log";
         }
 
         // Validate we have some way to locate data files:
@@ -166,7 +166,7 @@ Short aliases:
             // Derive paths from data_dir (+ optional data_name)
             namespace fs = std::filesystem;
             auto join = [](const fs::path& a, const std::string& b) {
-                return (a / b).string();
+                return (a.string() + b);
             };
             auto stem = cfg.data_name; // may be empty
             auto make_file = [&](const std::string& suffix, const std::string& ext){

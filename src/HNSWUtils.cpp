@@ -187,7 +187,7 @@ void insertFromFile(ROCKSDB_NAMESPACE::HNSWGraph &graph, const std::string &file
         return;
     }
 
-    while (input.read(reinterpret_cast<char *>(&dim), sizeof(int)) && node_count <= 100000000)
+    while (input.read(reinterpret_cast<char *>(&dim), sizeof(int)) && node_count <= 100000)
     {
         if (node_count == 0)
         {
@@ -223,7 +223,7 @@ void insertFromFile(ROCKSDB_NAMESPACE::HNSWGraph &graph, const std::string &file
 
         graph.insertNode(static_cast<int>(node_count), finalVec);
 
-        if (node_count % 100000 == 0)
+        if (node_count % 1000 == 0)
         {
             std::cout << "Inserting node " << node_count << std::endl;
         }

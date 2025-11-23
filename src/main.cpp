@@ -7,6 +7,7 @@
 #include "Config.h"
 #include "rocksdb/statistics.h"
 
+
 int main(int argc, char* argv[])
 {
     Config cfg = Config::Parse(argc, argv);
@@ -16,8 +17,7 @@ int main(int argc, char* argv[])
     options.db_paths.emplace_back(ROCKSDB_NAMESPACE::DbPath(cfg.db_path, cfg.db_target_size));
     options.statistics = rocksdb::CreateDBStatistics();
 
-    ROCKSDB_NAMESPACE::RocksGraph asterDB(options);
-    ApplyEdgeUpdatePolicy(asterDB, cfg.edge_update_policy);
+    ROCKSDB_NAMESPACE::RocksGraph asterDB(options, EDGE_UPDATE_EAGER, ENCODING_TYPE_NONE, true);
 
     std::ofstream outFile(cfg.output_path);
     if (!outFile.is_open()) {

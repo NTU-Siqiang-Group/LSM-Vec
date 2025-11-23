@@ -3,7 +3,7 @@
 
 #include <vector>
 #include <string>
-#include "HNSWGraph.h"
+#include "HNSWGraph.h" // Include your HNSWGraph class definition
 
 // Reads vectors from a bvecs file
 std::vector<std::vector<float>> readBvecsFile(const std::string& filename);
