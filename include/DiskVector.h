@@ -1,100 +1,514 @@
 #pragma once
 
-#include <iostream>
-#include <fstream>
+#include <string>
 #include <vector>
+#include <unordered_map>
+#include <deque>
+#include <fstream>
 #include <stdexcept>
 #include <cstring>
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
 
-class VectorStorage
-{
+class IVectorStorage {
+public:
+    virtual ~IVectorStorage() = default;
+
+    // Dimension of each vector (number of floats)
+    virtual size_t getVectorDim() const = 0;
+
+    // Maximum number of logical IDs supported
+    virtual size_t getCapacity() const = 0;
+
+    // Store vector for logical ID 'id' (basic API)
+    virtual void storeVectorToDisk(int id,
+                                   const std::vector<float>& vec) = 0;
+
+    // Optional section-aware API. Default implementation ignores sectionKey
+    // and forwards to the basic store.
+    virtual void storeVectorToDisk(int id,
+                                   const std::vector<float>& vec,
+                                   int sectionKey)
+    {
+        (void)sectionKey;
+        storeVectorToDisk(id, vec);
+    }
+
+    // Read vector for logical ID 'id'
+    virtual void readVectorFromDisk(int id,
+                                    std::vector<float>& vec) = 0;
+
+    // Optional prefetch API. Default is no-op.
+    virtual void prefetchByIds(const std::vector<int>& /*ids*/) {}
+};
+
+class BasicVectorStorage : public IVectorStorage {
 private:
-    std::string filePath;
-    size_t vectorSize;   
-    size_t totalVectors; 
-    size_t fileSize;     
+    std::string filePath_;
+    size_t dim_;          // number of floats per vector
+    size_t totalVectors_; // capacity (# of logical IDs)
+    size_t fileSizeBytes_;
 
-    std::fstream fileStream; 
+    std::fstream fileStream_;
 
 public:
-    VectorStorage(const std::string &path, size_t vecSize, size_t numVectors)
-        : filePath(path), vectorSize(vecSize), totalVectors(numVectors)
+    BasicVectorStorage(const std::string& path,
+                       size_t dim,
+                       size_t numVectors)
+        : filePath_(path),
+          dim_(dim),
+          totalVectors_(numVectors)
     {
-        fileSize = vectorSize * totalVectors * sizeof(float);
-        fileStream.open(filePath, std::ios::in | std::ios::out | std::ios::binary);
-        if (!fileStream.is_open())
+        if (dim_ == 0) {
+            throw std::runtime_error("Vector dimension must be > 0.");
+        }
+
+        fileSizeBytes_ = dim_ * totalVectors_ * sizeof(float);
+
+        fileStream_.open(filePath_,
+                         std::ios::in | std::ios::out | std::ios::binary);
+        if (!fileStream_.is_open())
         {
-            fileStream.open(filePath, std::ios::out | std::ios::binary);
-            if (!fileStream.is_open())
+            // Try to create the file
+            fileStream_.open(filePath_,
+                             std::ios::out | std::ios::binary | std::ios::trunc);
+            if (!fileStream_.is_open())
             {
                 throw std::runtime_error("Failed to create file.");
             }
-            fileStream.close();
+            fileStream_.close();
 
-            fileStream.open(filePath, std::ios::in | std::ios::out | std::ios::binary);
-            if (!fileStream.is_open())
+            fileStream_.open(filePath_,
+                             std::ios::in | std::ios::out | std::ios::binary);
+            if (!fileStream_.is_open())
             {
                 throw std::runtime_error("Failed to open file.");
             }
         }
 
-        fileStream.seekp(0, std::ios::end);
-        size_t currentSize = fileStream.tellp();
-        if (currentSize < fileSize)
+        // Ensure file has enough size
+        fileStream_.seekp(0, std::ios::end);
+        size_t currentSize = static_cast<size_t>(fileStream_.tellp());
+        if (currentSize < fileSizeBytes_)
         {
-            fileStream.seekp(fileSize - 1);
-            fileStream.write("", 1); 
+            fileStream_.seekp(static_cast<std::streamoff>(fileSizeBytes_ - 1),
+                              std::ios::beg);
+            char zero = 0;
+            fileStream_.write(&zero, 1);
+            fileStream_.flush();
         }
     }
 
-    ~VectorStorage()
+    ~BasicVectorStorage() override
     {
-        if (fileStream.is_open())
+        if (fileStream_.is_open())
         {
-            fileStream.close();
+            fileStream_.close();
         }
     }
 
-    void storeVectorToDisk(int id, const std::vector<float> &vector)
+    // ---- IVectorStorage interface ----
+
+    size_t getVectorDim() const override {
+        return dim_;
+    }
+
+    size_t getCapacity() const override {
+        return totalVectors_;
+    }
+
+    void storeVectorToDisk(int id,
+                           const std::vector<float>& vector) override
     {
-        if (id < 0 || id >= totalVectors)
+        if (id < 0 || static_cast<size_t>(id) >= totalVectors_)
         {
             throw std::out_of_range("Vector ID out of range.");
         }
-        if (vector.size() != vectorSize)
+        if (vector.size() != dim_)
         {
             throw std::runtime_error("Vector size mismatch.");
         }
 
-        size_t offset = id * vectorSize * sizeof(float);
-        fileStream.seekp(offset, std::ios::beg);
+        size_t offset = static_cast<size_t>(id) * dim_ * sizeof(float);
+        fileStream_.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
 
-        fileStream.write(reinterpret_cast<const char *>(vector.data()), vectorSize * sizeof(float));
-        if (!fileStream.good())
+        fileStream_.write(reinterpret_cast<const char*>(vector.data()),
+                          static_cast<std::streamsize>(dim_ * sizeof(float)));
+        if (!fileStream_.good())
         {
             throw std::runtime_error("Failed to write vector to file.");
         }
+        fileStream_.flush();
     }
 
-    void readVectorFromDisk(int id, std::vector<float> &vector)
+    void readVectorFromDisk(int id,
+                            std::vector<float>& vector) override
     {
-        if (id < 0 || id >= totalVectors)
+        if (id < 0 || static_cast<size_t>(id) >= totalVectors_)
         {
             throw std::out_of_range("Vector ID out of range.");
         }
 
-        if (vector.size() != vectorSize)
+        if (vector.size() != dim_)
         {
-            vector.resize(vectorSize);
+            vector.resize(dim_);
         }
 
-        size_t offset = id * vectorSize * sizeof(float);
-        fileStream.seekg(offset, std::ios::beg);
+        size_t offset = static_cast<size_t>(id) * dim_ * sizeof(float);
+        fileStream_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
 
-        fileStream.read(reinterpret_cast<char *>(vector.data()), vectorSize * sizeof(float));
-        if (!fileStream.good())
+        fileStream_.read(reinterpret_cast<char*>(vector.data()),
+                         static_cast<std::streamsize>(dim_ * sizeof(float)));
+        if (!fileStream_.good())
         {
             throw std::runtime_error("Failed to read vector from file.");
+        }
+    }
+};
+
+class PagedVectorStorage : public IVectorStorage {
+public:
+    static constexpr size_t kPageSize = 4096; // 4KB OS page
+
+private:
+    std::string filePath_;
+    size_t dim_;            // vector dimension
+    size_t recordSize_;     // dim_ * sizeof(float)
+    size_t totalVectors_;   // logical ID capacity
+    size_t vectorsPerPage_; // how many vectors fit into one page (floor division)
+
+    std::fstream fileStream_;
+
+    // logical ID -> page & slot mapping
+    std::vector<int64_t>  idToPage_;       // -1 means unassigned
+    std::vector<uint16_t> idToSlotInPage_; // slot in [0, vectorsPerPage_)
+
+    struct PageMeta {
+        int sectionIdx;      // internal section index, -1 for unused
+        uint16_t usedSlots;  // number of occupied slots in this page
+    };
+
+    std::vector<PageMeta> pages_; // pageId -> meta
+
+    // Section mappings: external sectionKey -> internal sectionIdx
+    std::unordered_map<int,int> sectionKeyToIdx_;
+    std::vector<int>            sectionIdxToKey_;
+
+    // For each sectionIdx, list of pages that still have free slots
+    std::unordered_map<int,std::vector<size_t>> sectionOpenPages_;
+
+    // Page cache (FIFO) in units of full pages (4KB each)
+    size_t maxCachedPages_;
+
+    struct PageBuf {
+        std::vector<char> data; // always kPageSize bytes
+    };
+
+    std::unordered_map<size_t, PageBuf> pageCache_; // pageId -> data
+    std::deque<size_t>                  pageOrder_; // FIFO order of pageIds
+
+private:
+    // Open or create the underlying file.
+    void openFile() {
+        fileStream_.open(filePath_, std::ios::in | std::ios::out | std::ios::binary);
+        if (!fileStream_.is_open()) {
+            // Try to create a new file
+            fileStream_.open(filePath_, std::ios::out | std::ios::binary | std::ios::trunc);
+            if (!fileStream_.is_open()) {
+                throw std::runtime_error("Failed to create vector file.");
+            }
+            fileStream_.close();
+            fileStream_.open(filePath_, std::ios::in | std::ios::out | std::ios::binary);
+            if (!fileStream_.is_open()) {
+                throw std::runtime_error("Failed to reopen vector file.");
+            }
+        }
+    }
+
+    // Ensure that the file is large enough to contain pageId (0-based)
+    void ensurePageAllocated(size_t pageId) {
+        size_t requiredSize = (pageId + 1) * kPageSize;
+        fileStream_.seekp(0, std::ios::end);
+        size_t currentSize = static_cast<size_t>(fileStream_.tellp());
+        if (currentSize < requiredSize) {
+            fileStream_.seekp(static_cast<std::streamoff>(requiredSize - 1), std::ios::beg);
+            char zero = 0;
+            fileStream_.write(&zero, 1);
+            fileStream_.flush();
+        }
+    }
+
+    // Evict pages if cache size exceeds the limit (FIFO).
+    void evictIfNeeded() {
+        if (maxCachedPages_ == 0) return;
+        while (pageCache_.size() > maxCachedPages_) {
+            size_t victim = pageOrder_.front();
+            pageOrder_.pop_front();
+            pageCache_.erase(victim);
+        }
+    }
+
+    // Load a full 4KB page into the cache.
+    void loadPageToCache(size_t pageId) {
+        if (maxCachedPages_ == 0) return;             // caching disabled
+        if (pageCache_.find(pageId) != pageCache_.end()) return; // already cached
+
+        // FIFO eviction
+        if (pageCache_.size() >= maxCachedPages_) {
+            size_t victim = pageOrder_.front();
+            pageOrder_.pop_front();
+            pageCache_.erase(victim);
+        }
+
+        PageBuf buf;
+        buf.data.resize(kPageSize, 0);
+
+        size_t offset = pageId * kPageSize;
+        fileStream_.clear();
+        fileStream_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+        fileStream_.read(buf.data.data(), static_cast<std::streamsize>(kPageSize));
+        // If the read is short (near EOF), remaining bytes stay zero.
+
+        pageCache_.emplace(pageId, std::move(buf));
+        pageOrder_.push_back(pageId);
+    }
+
+    // Try to read a vector from cache by pageId & slot.
+    bool tryReadFromCache(size_t pageId, uint16_t slot, std::vector<float>& vec) {
+        if (maxCachedPages_ == 0) return false;
+        auto it = pageCache_.find(pageId);
+        if (it == pageCache_.end()) return false;
+
+        const PageBuf& buf = it->second;
+        size_t offsetInPage = static_cast<size_t>(slot) * recordSize_;
+        if (offsetInPage + recordSize_ > buf.data.size()) {
+            return false; // corrupted / inconsistent
+        }
+        if (vec.size() != dim_) vec.resize(dim_);
+        std::memcpy(vec.data(), buf.data.data() + offsetInPage, recordSize_);
+        return true;
+    }
+
+    // Write a single record (one vector) at (pageId, slot) to disk.
+    void writeRecord(size_t pageId, uint16_t slot, const std::vector<float>& vec) {
+        if (vec.size() != dim_) {
+            throw std::runtime_error("Vector size mismatch in writeRecord.");
+        }
+        size_t offset = pageId * kPageSize + static_cast<size_t>(slot) * recordSize_;
+        fileStream_.clear();
+        fileStream_.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
+        fileStream_.write(reinterpret_cast<const char*>(vec.data()),
+                          static_cast<std::streamsize>(recordSize_));
+        if (!fileStream_.good()) {
+            throw std::runtime_error("Failed to write vector to file.");
+        }
+        fileStream_.flush();
+    }
+
+    // If the page is cached, update the cached copy after a write.
+    void updateCacheAfterWrite(size_t pageId, uint16_t slot, const std::vector<float>& vec) {
+        if (maxCachedPages_ == 0) return;
+        auto it = pageCache_.find(pageId);
+        if (it == pageCache_.end()) return;
+
+        PageBuf& buf = it->second;
+        size_t offsetInPage = static_cast<size_t>(slot) * recordSize_;
+        if (offsetInPage + recordSize_ > buf.data.size()) {
+            return;
+        }
+        std::memcpy(buf.data.data() + offsetInPage,
+                    reinterpret_cast<const char*>(vec.data()),
+                    recordSize_);
+    }
+
+    // Allocate a free slot for a given sectionKey (creates section/pages on demand).
+    std::pair<size_t,uint16_t> allocateSlotForSection(int sectionKey) {
+        // Map external sectionKey to internal sectionIdx
+        int sectionIdx;
+        auto it = sectionKeyToIdx_.find(sectionKey);
+        if (it == sectionKeyToIdx_.end()) {
+            sectionIdx = static_cast<int>(sectionIdxToKey_.size());
+            sectionKeyToIdx_[sectionKey] = sectionIdx;
+            sectionIdxToKey_.push_back(sectionKey);
+        } else {
+            sectionIdx = it->second;
+        }
+
+        auto& openList = sectionOpenPages_[sectionIdx];
+
+        // If there is a not-full page in this section, use it
+        if (!openList.empty()) {
+            size_t pageId = openList.back();
+            openList.pop_back();
+            PageMeta& meta = pages_[pageId];
+            if (meta.usedSlots >= vectorsPerPage_) {
+                // Should not happen, but guard anyway
+                return allocateSlotForSection(sectionKey);
+            }
+            uint16_t slot = meta.usedSlots++;
+            if (meta.usedSlots < vectorsPerPage_) {
+                openList.push_back(pageId);
+            }
+            return {pageId, slot};
+        }
+
+        // Otherwise, allocate a new page for this section
+        size_t pageId = pages_.size();
+        pages_.push_back(PageMeta{sectionIdx, 0});
+        ensurePageAllocated(pageId);
+
+        PageMeta& meta = pages_.back();
+        meta.usedSlots = 1;
+        uint16_t slot = 0;
+
+        if (meta.usedSlots < vectorsPerPage_) {
+            openList.push_back(pageId);
+        }
+
+        return {pageId, slot};
+    }
+
+public:
+    // Constructor
+    PagedVectorStorage(const std::string& path,
+                  size_t dim,
+                  size_t capacity = 1000000,
+                  size_t maxCachedPages = 128)
+        : filePath_(path),
+          dim_(dim),
+          recordSize_(dim * sizeof(float)),
+          totalVectors_(capacity),
+          vectorsPerPage_(0),
+          maxCachedPages_(maxCachedPages)
+    {
+        if (dim_ == 0) {
+            throw std::runtime_error("Vector dimension must be > 0.");
+        }
+        if (recordSize_ > kPageSize) {
+            throw std::runtime_error("Vector too large to fit into one page.");
+        }
+
+        vectorsPerPage_ = kPageSize / recordSize_;
+        if (vectorsPerPage_ == 0) {
+            throw std::runtime_error("Invalid vectorsPerPage (0).");
+        }
+
+        openFile();
+
+        idToPage_.assign(totalVectors_, -1);
+        idToSlotInPage_.assign(totalVectors_, 0);
+    }
+
+    ~PagedVectorStorage() {
+        if (fileStream_.is_open()) {
+            fileStream_.close();
+        }
+    }
+
+    size_t getVectorDim() const override { return dim_; }
+    size_t getCapacity() const override { return totalVectors_; }
+    size_t vectorsPerPage() const { return vectorsPerPage_; }
+
+    void setMaxCachedPages(size_t m) {
+        maxCachedPages_ = m;
+        evictIfNeeded();
+    }
+
+    // Store vector with a section hint: 'sectionKey' is derived from HNSW Level-1 entry.
+    // We assign the vector to some page belonging to that section; pages are always
+    // 4KB and vectors never cross page boundaries.
+    void storeVectorToDisk(int id,
+                           const std::vector<float>& vec,
+                           int sectionKey) override
+    {
+        if (id < 0 || static_cast<size_t>(id) >= totalVectors_) {
+            throw std::out_of_range("Vector ID out of range.");
+        }
+        if (vec.size() != dim_) {
+            throw std::runtime_error("Vector size mismatch.");
+        }
+
+        int64_t curPage = idToPage_[static_cast<size_t>(id)];
+        uint16_t curSlot = idToSlotInPage_[static_cast<size_t>(id)];
+
+        if (curPage >= 0) {
+            // Overwrite existing slot
+            writeRecord(static_cast<size_t>(curPage), curSlot, vec);
+            updateCacheAfterWrite(static_cast<size_t>(curPage), curSlot, vec);
+            return;
+        }
+
+        auto [pageId, slot] = allocateSlotForSection(sectionKey);
+        idToPage_[static_cast<size_t>(id)]       = static_cast<int64_t>(pageId);
+        idToSlotInPage_[static_cast<size_t>(id)] = slot;
+
+        writeRecord(pageId, slot, vec);
+        updateCacheAfterWrite(pageId, slot, vec);
+    }
+
+    // Backward-compatible version: if you don't care about sections,
+    // use ID as the "sectionKey".
+    void storeVectorToDisk(int id, const std::vector<float>& vec) override {
+        storeVectorToDisk(id, vec, id);
+    }
+
+    // Read a vector by its logical ID.
+    void readVectorFromDisk(int id, std::vector<float>& vec) override
+    {
+        if (id < 0 || static_cast<size_t>(id) >= totalVectors_) {
+            throw std::out_of_range("Vector ID out of range.");
+        }
+
+        int64_t page = idToPage_[static_cast<size_t>(id)];
+        uint16_t slot = idToSlotInPage_[static_cast<size_t>(id)];
+
+        if (page < 0) {
+            std::printf("Problematic id: %d\n", id);
+            throw std::runtime_error("Vector slot not assigned for this ID.");
+        }
+
+        size_t pageId = static_cast<size_t>(page);
+
+        // 1) Try page cache
+        if (tryReadFromCache(pageId, slot, vec)) {
+            return;
+        }
+
+        // 2) If not cached, optionally cache the page then try again
+        if (maxCachedPages_ > 0) {
+            loadPageToCache(pageId);
+            if (tryReadFromCache(pageId, slot, vec)) {
+                return;
+            }
+        }
+
+        // 3) Fallback: direct disk read of this record
+        if (vec.size() != dim_) vec.resize(dim_);
+        size_t offset = pageId * kPageSize + static_cast<size_t>(slot) * recordSize_;
+        fileStream_.clear();
+        fileStream_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+        fileStream_.read(reinterpret_cast<char*>(vec.data()),
+                         static_cast<std::streamsize>(recordSize_));
+        if (!fileStream_.good()) {
+            throw std::runtime_error("Failed to read vector from file.");
+        }
+    }
+
+    // Prefetch pages corresponding to given vector IDs.
+    // This simply ensures the relevant pages are loaded into the page cache.
+    void prefetchByIds(const std::vector<int>& ids) override {
+        if (maxCachedPages_ == 0) return;
+
+        std::unordered_map<size_t, bool> seenPage;
+        for (int id : ids) {
+            if (id < 0 || static_cast<size_t>(id) >= totalVectors_) continue;
+            int64_t page = idToPage_[static_cast<size_t>(id)];
+            if (page < 0) continue;
+            size_t pageId = static_cast<size_t>(page);
+            if (seenPage.emplace(pageId, true).second) {
+                loadPageToCache(pageId);
+            }
         }
     }
 };

@@ -7,6 +7,7 @@
 #include <sstream>
 #include <iostream>
 
+
 uint8_t encode(int value)
 {
     if (value < 0)
@@ -70,11 +71,28 @@ float gaussian(  // r.v. from Gaussian(mean, sigma)
 namespace ROCKSDB_NAMESPACE
 {
 
-    HNSWGraph::HNSWGraph(int M, int Mmax, int Ml, float efConstruction, RocksGraph *db, std::ostream &outFile, std::string vectorfilePath, int vectordim)
-        : M(M), Mmax(Mmax), Ml(Ml), efConstruction(efConstruction), db(db), outFile(outFile), gen(rd()), dist(0, 1), maxLayer(-1), entryPoint(-1), ioCount(0), ioTime(0.0), indexingTime(0.0)
+    HNSWGraph::HNSWGraph(int M, int Mmax, int Ml, float efConstruction, RocksGraph *db, std::ostream &outFile, std::string vectorfilePath, int vectordim, const Config& cfg)
+        : M(M), Mmax(Mmax), Ml(Ml), efConstruction(efConstruction), db(db), outFile(outFile), gen(rd()), dist(0, 1), maxLayer(-1), entryPoint(-1), ioTime(0.0), indexingTime(0.0)
     {
         gen.seed(12345);
-        vectorStorage = std::make_unique<VectorStorage>(vectorfilePath, vectordim, 100000000);
+        //vectorStorage = std::make_unique<VectorStorage>(vectorfilePath, vectordim, 100000000);
+        //vectorStorage = std::make_unique<VectorStorage>(vectorfilePath, vectordim);
+        if (cfg.vector_storage_type == 1) {
+            printf("Using page-based vector storage layout\n");
+            vectorStorage = std::make_unique<PagedVectorStorage>(
+                cfg.vector_file_path,
+                static_cast<size_t>(vectordim),
+                cfg.vec_file_capacity,
+                cfg.paged_max_cached_pages
+            );
+        } else {
+            printf("Using plain vector storage layout\n");
+            vectorStorage = std::make_unique<BasicVectorStorage>(
+                cfg.vector_file_path,
+                static_cast<size_t>(vectordim),
+                cfg.vec_file_capacity
+            );
+        }
     }
     // Generates a random level for the node
     int HNSWGraph::randomLevel()
@@ -98,16 +116,11 @@ namespace ROCKSDB_NAMESPACE
     }
 
     // Inserts a node into the HNSW graph
-    void HNSWGraph::insertNode(int id, const std::vector<float> &point)
+    void HNSWGraph::insertNodeOld(int id, const std::vector<float> &point)
     {
         auto start = std::chrono::high_resolution_clock::now();
 
-        auto vecstart = std::chrono::high_resolution_clock::now();
-        vectorStorage->storeVectorToDisk(id, point);
-        auto vecend = std::chrono::high_resolution_clock::now();
-        double vecduration = std::chrono::duration<double>(vecend - vecstart).count();
-        vecwritetime += vecduration; 
-        vecwritecount++;             
+        vectorStorage->storeVectorToDisk(id, point);         
 
         int highestLayer = randomLevel();
         // std::cout << "Node " << id << " assigned to highest layer: " << highestLayer << std::endl;
@@ -134,7 +147,6 @@ namespace ROCKSDB_NAMESPACE
 
         int currentEntryPoint = entryPoint;
 
-        auto start1 = std::chrono::high_resolution_clock::now(); // Start timing
         for (int l = maxLayer; l > highestLayer; --l)
         {
             std::vector<int> closest = searchLayer(point, currentEntryPoint, 1, l);
@@ -143,15 +155,10 @@ namespace ROCKSDB_NAMESPACE
                 currentEntryPoint = closest[0];
             }
         }
-        auto end1 = std::chrono::high_resolution_clock::now(); // End timing
-        // std::cout << "Search layer took " << std::chrono::duration<double>(end1 - start1).count() << " seconds" << std::endl;
 
         for (int l = std::min(maxLayer, highestLayer); l >= 0; --l)
         {
-            auto start2 = std::chrono::high_resolution_clock::now(); // Start timing
             std::vector<int> neighbors = searchLayer(point, currentEntryPoint, efConstruction, l);
-            auto end2 = std::chrono::high_resolution_clock::now(); // End timing
-            // std::cout << "search Layer took " << std::chrono::duration<double>(end2 - start2).count() << " seconds" << std::endl;
             std::vector<int> selectedNeighbors;
             if(l > 0)
                 selectedNeighbors = selectNeighbors(point, neighbors, M, l);
@@ -169,7 +176,6 @@ namespace ROCKSDB_NAMESPACE
             }
 
             // shrink connections if needed
-            auto start3 = std::chrono::high_resolution_clock::now(); // Start timing
             if (l > 0)
             {
                 for (int neighbor : selectedNeighbors)
@@ -190,15 +196,7 @@ namespace ROCKSDB_NAMESPACE
                 {
                     // eConn ← neighbourhood(e) at layer l
                     rocksdb::Edges edges;
-                    auto start = std::chrono::high_resolution_clock::now(); // Start timing
                     db->GetAllEdges(neighbor, &edges);
-
-                    auto end = std::chrono::high_resolution_clock::now(); // End timing
-                    double duration = std::chrono::duration<double>(end - start).count();
-                    ioTime += duration;     // Accumulate total IO time
-                    readIOTime += duration; // Accumulate read IO time
-                    ioCount++;
-                    readIOCount++; // Increase read IO count
 
                     if (edges.num_edges_out > Mmax)
                     {
@@ -215,12 +213,7 @@ namespace ROCKSDB_NAMESPACE
                         //std::vector<float> cur_point1 = nodes[neighbor].point;
                         std::vector<float> cur_point2;
 
-                        auto start = std::chrono::high_resolution_clock::now(); // Start timing
                         vectorStorage->readVectorFromDisk(neighbor, cur_point2);
-                        auto end = std::chrono::high_resolution_clock::now(); // End timing
-                        double duration = std::chrono::duration<double>(end - start).count();
-                        vecreadtime += duration; // Accumulate read vector time
-                        vecreadcount++;          // Increase read vector count
 
                         std::vector<int> eNewConn = selectNeighbors(cur_point2, eConns, Mmax, l);
                         // std::cout << "eConns size: " << eConns.size() << std::endl;
@@ -230,15 +223,8 @@ namespace ROCKSDB_NAMESPACE
                         {
                             if (std::find(eNewConn.begin(), eNewConn.end(), node) == eNewConn.end())
                             {
-                                auto start = std::chrono::high_resolution_clock::now(); // Start timing
                                 db->DeleteEdge(neighbor, node);
                                 db->DeleteEdge(node, neighbor);
-                                auto end = std::chrono::high_resolution_clock::now(); // End timing
-                                double duration = std::chrono::duration<double>(end - start).count();
-                                ioTime += duration;           // Accumulate total IO time
-                                deleteedgeIOTime += duration; // Accumulate write IO time
-                                ioCount += 2;
-                                deleteedgeIOCount += 2; // Increase write IO count
                             }
                         }
                         // rocksdb::Edges edges;
@@ -247,8 +233,6 @@ namespace ROCKSDB_NAMESPACE
                     }
                 }
             }
-            auto end3 = std::chrono::high_resolution_clock::now(); // End timing
-            // std::cout << "Shrink connections took " << std::chrono::duration<double>(end3 - start3).count() << " seconds" << std::endl;
             if (!neighbors.empty())
             {
                 currentEntryPoint = neighbors[0];
@@ -267,6 +251,160 @@ namespace ROCKSDB_NAMESPACE
         indexingTime += std::chrono::duration<double>(end - start).count();
     }
 
+    void HNSWGraph::insertNode(int id, const std::vector<float> &point)
+    {
+        auto start = std::chrono::high_resolution_clock::now();
+        bool vectorStored = false;  // NEW: track whether we've stored this vector
+
+        int highestLayer = randomLevel();
+
+        if (highestLayer > 0)
+        {
+            Node newNode{id, point};
+            newNode.neighbors = std::unordered_map<int, std::vector<int>>();
+            nodes[id] = newNode;
+        }
+
+        // ----- First node special case -----
+        if (entryPoint == -1)
+        {
+            entryPoint = id;
+            maxLayer   = highestLayer;
+
+            linkNeighborsAsterDB(id, point, {});
+
+            // For the first node, we can just use id as sectionKey
+            int sectionKey = id;
+            vectorStorage->storeVectorToDisk(id, point, sectionKey);
+            vectorStored = true;
+
+            auto end = std::chrono::high_resolution_clock::now();
+            indexingTime += std::chrono::duration<double>(end - start).count();
+            return;
+        }
+
+        int currentEntryPoint = entryPoint;
+
+        // ----- Search down from top layer to (highestLayer+1) to choose entry -----
+        for (int l = maxLayer; l > highestLayer; --l)
+        {
+            std::vector<int> closest = searchLayer(point, currentEntryPoint, 1, l);
+            if (!closest.empty())
+            {
+                currentEntryPoint = closest[0];
+            }
+        }
+
+        // Initial guess for sectionKey: if we have upper layers, use currentEntryPoint,
+        // otherwise fall back to global entryPoint.
+        int sectionKey = (maxLayer >= 1 ? currentEntryPoint : entryPoint);
+
+        // ----- From min(maxLayer, highestLayer) ... down to 0 -----
+        for (int l = std::min(maxLayer, highestLayer); l >= 0; --l)
+        {
+            std::vector<int> neighbors =
+                searchLayer(point, currentEntryPoint, efConstruction, l);
+            std::vector<int> selectedNeighbors =
+                selectNeighbors(point, neighbors, M, l);
+
+            // If we are at level 1, refine sectionKey using closest neighbor at l=1.
+            if (l == 1)
+            {
+                if (!neighbors.empty())
+                    sectionKey = neighbors[0];
+                else
+                    sectionKey = currentEntryPoint;
+            }
+
+            // *** NEW: when we first reach level 0, store the vector using sectionKey ***
+            if (l == 0 && !vectorStored)
+            {
+                vectorStorage->storeVectorToDisk(id, point, sectionKey);
+                vectorStored = true;
+            }
+
+            // Link neighbors as before
+            if (l > 0)
+            {
+                linkNeighbors(id, selectedNeighbors, l);
+            }
+            else // l == 0
+            {
+                linkNeighborsAsterDB(id, point, selectedNeighbors);
+            }
+
+            // ---- Shrink connections (unchanged) ----
+            if (l > 0)
+            {
+                for (int neighbor : selectedNeighbors)
+                {
+                    std::vector<int> eConn = nodes[neighbor].neighbors[l];
+                    if (eConn.size() > static_cast<size_t>(Mmax))
+                    {
+                        std::vector<int> eNewConn =
+                            selectNeighbors(nodes[neighbor].point, eConn, Mmax, l);
+                        nodes[neighbor].neighbors[l] = std::move(eNewConn);
+                    }
+                }
+            }
+            else // l == 0
+            {
+                for (int neighbor : selectedNeighbors)
+                {
+                    rocksdb::Edges edges;
+                    db->GetAllEdges(neighbor, &edges);
+
+                    if (edges.num_edges_out > static_cast<uint32_t>(Mmax))
+                    {
+                        std::vector<int> eConns;
+                        eConns.reserve(edges.num_edges_out);
+                        for (uint32_t i = 0; i < edges.num_edges_out; ++i)
+                        {
+                            eConns.push_back(edges.nxts_out[i].nxt);
+                        }
+
+                        std::vector<float> cur_point2;
+                        vectorStorage->readVectorFromDisk(neighbor, cur_point2);
+
+                        std::vector<int> eNewConn =
+                            selectNeighbors(cur_point2, eConns, Mmax, l);
+
+                        for (auto node : eConns)
+                        {
+                            if (std::find(eNewConn.begin(), eNewConn.end(), node) == eNewConn.end())
+                            {
+                                db->DeleteEdge(neighbor, node);
+                                db->DeleteEdge(node, neighbor);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!neighbors.empty())
+            {
+                currentEntryPoint = neighbors[0];
+            }
+        }
+
+        if (highestLayer > maxLayer)
+        {
+            entryPoint = id;
+            maxLayer   = highestLayer;
+            std::cout << "Updated entry point to node " << id
+                    << " at layer " << highestLayer << std::endl;
+        }
+
+        // Safety: in principle vectorStored must be true if we reached here.
+        if (!vectorStored)
+        {
+            vectorStorage->storeVectorToDisk(id, point, sectionKey);
+        }
+
+        auto end = std::chrono::high_resolution_clock::now();
+        indexingTime += std::chrono::duration<double>(end - start).count();
+    }
+
     // Links neighbors for upper layers stored in memory
     void HNSWGraph::linkNeighbors(int nodeid, const std::vector<int> &neighbors, int layer)
     {
@@ -279,38 +417,12 @@ namespace ROCKSDB_NAMESPACE
 
     void HNSWGraph::linkNeighborsAsterDB(int nodeId, const std::vector<float> &point, const std::vector<int> &neighbors)
     {
-        //db->edge_update_policy_ = EDGE_UPDATE_LAZY;
-        auto start = std::chrono::high_resolution_clock::now(); // Start timing
         db->AddVertex(nodeId);
-        auto end = std::chrono::high_resolution_clock::now(); // End timing
-        double duration = std::chrono::duration<double>(end - start).count();
-        ioTime += duration;          // Accumulate total IO time
-        writenodeIOTime += duration; // Accumulate write IO time
-        ioCount++;
-        writenodeIOCount++; // Increase write IO count
 
-        // Store point as a property
-        /*
-        std::string vectorStr;
-        for (float val : point)
-        {
-            vectorStr += std::to_string(val) + " ";
-        }
-        Property prop{"vector", vectorStr};
-        db->AddVertexProperty(nodeId, prop);
-        */
-        // std::cout << "neighbors size: " << neighbors.size() << std::endl;
         for (int neighbor : neighbors)
         {
-            auto start = std::chrono::high_resolution_clock::now(); // Start timing
             db->AddEdge(nodeId, neighbor);
             db->AddEdge(neighbor, nodeId);
-            auto end = std::chrono::high_resolution_clock::now(); // End timing
-            double duration = std::chrono::duration<double>(end - start).count();
-            ioTime += duration;        // Accumulate total IO time
-            addedgeIOTime += duration; // Accumulate write IO time
-            addedgeIOCount += 2;       // Increase write IO count
-            ioCount += 2;
         }
     }
 
@@ -348,12 +460,7 @@ namespace ROCKSDB_NAMESPACE
                 else if (layer == 0)
                 {
                     std::vector<float> candidateVector;
-                    auto start = std::chrono::high_resolution_clock::now(); // Start timing
                     vectorStorage->readVectorFromDisk(candidate, candidateVector);
-                    auto end = std::chrono::high_resolution_clock::now(); // End timing
-                    double duration = std::chrono::duration<double>(end - start).count();
-                    vecreadtime += duration; // Accumulate read vector time
-                    vecreadcount++;          // Increase read vector count
                     dist = euclideanDistance(point, candidateVector);
                 }
 
@@ -405,12 +512,7 @@ namespace ROCKSDB_NAMESPACE
                 if (it != vecCache.end()) return it->second;
 
                 std::vector<float> v;
-                auto start = std::chrono::high_resolution_clock::now();
                 vectorStorage->readVectorFromDisk(id, v);
-                auto end = std::chrono::high_resolution_clock::now();
-                double duration = std::chrono::duration<double>(end - start).count();
-                vecreadtime += duration;
-                vecreadcount++;
 
                 auto res = vecCache.emplace(id, std::move(v));
                 return res.first->second;
@@ -511,12 +613,7 @@ namespace ROCKSDB_NAMESPACE
                 if (it != vecCache.end()) return it->second;
 
                 std::vector<float> v;
-                auto start = std::chrono::high_resolution_clock::now();
                 vectorStorage->readVectorFromDisk(id, v);
-                auto end = std::chrono::high_resolution_clock::now();
-                double duration = std::chrono::duration<double>(end - start).count();
-                vecreadtime += duration;
-                vecreadcount++;
 
                 auto res = vecCache.emplace(id, std::move(v));
                 return res.first->second;
@@ -653,12 +750,7 @@ namespace ROCKSDB_NAMESPACE
             // float distToEP = euclideanDistance(queryPoint, nodes[entryPoint].point);
             std::vector<float> entryPointVector;
 
-            auto start = std::chrono::high_resolution_clock::now(); // Start timing
             vectorStorage->readVectorFromDisk(entryPoint, entryPointVector);
-            auto end = std::chrono::high_resolution_clock::now(); // End timing
-            double duration = std::chrono::duration<double>(end - start).count();
-            vecreadtime += duration; // Accumulate read vector time
-            vecreadcount++;          // Increase read vector count
 
             float distToEP = euclideanDistance(queryPoint, entryPointVector);
             visited.insert(entryPoint); // v ← ep
@@ -681,14 +773,7 @@ namespace ROCKSDB_NAMESPACE
                 }
 
                 rocksdb::Edges edges;
-                auto start = std::chrono::high_resolution_clock::now(); // Start timing
                 db->GetAllEdges(current, &edges);
-                auto end = std::chrono::high_resolution_clock::now(); // End timing
-                double duration = std::chrono::duration<double>(end - start).count();
-                ioTime += duration;     // Accumulate total IO time
-                readIOTime += duration; // Accumulate read IO time
-                ioCount++;
-                readIOCount++; // Increase read IO count
 
                 std::vector<int> neighbors;
                 for (uint32_t i = 0; i < edges.num_edges_out; ++i)
@@ -703,12 +788,7 @@ namespace ROCKSDB_NAMESPACE
                         visited.insert(neighbor);
                         // float dist = euclideanDistance(queryPoint, nodes[neighbor].point);
                         std::vector<float> neighborVector;
-                        auto start = std::chrono::high_resolution_clock::now(); // Start timing
                         vectorStorage->readVectorFromDisk(neighbor, neighborVector);
-                        auto end = std::chrono::high_resolution_clock::now(); // End timing
-                        double duration = std::chrono::duration<double>(end - start).count();
-                        vecreadtime += duration; // Accumulate read vector time
-                        vecreadcount++;          // Increase read vector count
 
                         float dist = euclideanDistance(queryPoint, neighborVector);
                         if (nearestNeighbors.size() < ef || dist < nearestNeighbors.top().first)
@@ -775,7 +855,6 @@ namespace ROCKSDB_NAMESPACE
         std::cout << "Indexing Time: " << indexingTime << " seconds" << std::endl;
 
         std::cout << "-------graph part------" << std::endl;
-        std::cout << "Total Aster I/O Operations: " << ioCount << std::endl;
         std::cout << "Total Aster I/O Time: " << ioTime << " seconds" << std::endl;
         std::cout << "Read Operations: " << readIOCount << ", Time: " << readIOTime << " seconds" << std::endl;
         std::cout << "Write Node Operations: " << writenodeIOCount << ", Time: " << writenodeIOTime << " seconds" << std::endl;

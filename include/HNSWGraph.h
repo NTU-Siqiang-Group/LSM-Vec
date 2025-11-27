@@ -6,6 +6,7 @@
 #include "rocksdb/db.h"
 #include <iostream>
 #include "DiskVector.h"
+#include "Config.h"
 
 namespace ROCKSDB_NAMESPACE
 {
@@ -25,16 +26,16 @@ namespace ROCKSDB_NAMESPACE
             useHeuristicNeighborSelection_ = v;
         }
 
-        HNSWGraph(int M, int Mmax, int Ml, float efConstruction, RocksGraph *db, std::ostream &outFile, std::string vectorfilePath, int dim);
+        HNSWGraph(int M, int Mmax, int Ml, float efConstruction, RocksGraph *db, std::ostream &outFile, std::string vectorfilePath, int dim, const Config& cfg);
 
         void insertNode(int id, const std::vector<float> &point);
+        void insertNodeOld(int id, const std::vector<float> &point);
         int KNNsearch(const std::vector<float> &queryPoint);
-        void printGraphStructure();
         std::unordered_set<int> highestLayerNodes;
 
+        void printIndexStatus() const;
         void printStatistics() const;
 
-        int ioCount;         // I/O COUT
         double ioTime;       // I/O TIME(SECONDS)
         double indexingTime; // INDEXING TIME(SECONDS)
         size_t readIOCount = 0;
@@ -51,8 +52,7 @@ namespace ROCKSDB_NAMESPACE
         double readEdgesTime = 0.0;          // db->GetAllEdges TIME
         std::string vectorfilePath;
         int vectordim = 0;
-        std::unique_ptr<VectorStorage> vectorStorage;
-        void debugPrintGraph();
+        std::unique_ptr<IVectorStorage> vectorStorage;
 
         size_t vecreadcount = 0;
         double vecreadtime = 0.0;

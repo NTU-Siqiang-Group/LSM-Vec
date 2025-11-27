@@ -15,6 +15,9 @@ struct Config {
     int   Mmax = 16;
     int   Ml = 1;
     float efConstruction = 64.0f;
+    size_t input_size;
+
+    int vector_storage_type = 0; // 0 for basic, 1 for paged
 
     // --- Paths / I/O ---
     std::string db_path;                // required: RocksDB path (directory)
@@ -22,6 +25,8 @@ struct Config {
 
     // If --vec is omitted, this defaults to db_path
     std::string vector_file_path;
+    size_t vec_file_capacity = 100000;
+    size_t paged_max_cached_pages = 256;
 
     // New: single data directory and optional shared name/prefix
     // If only --data-dir is provided (no --name), filenames become:
@@ -117,6 +122,7 @@ Short aliases:
                 else if (key == "l") put("Ml", val);
                 else if (key == "e") put("efc", val);
                 else if (key == "p") put("edge-policy", val);
+                else if (key == "V") put("vec-storage", val);
             }
         }
 
@@ -139,6 +145,7 @@ Short aliases:
         if (kv.count("base"))               cfg.input_file_path = kv["base"];
         if (kv.count("query"))              cfg.query_file_path = kv["query"];
         if (kv.count("truth"))              cfg.groundtruth_file_path = kv["truth"];
+        if (kv.count("vec-storage"))              cfg.vector_storage_type = parseI(kv["vec-storage"]);
 
         // Default vector_file_path to db_path if not provided
         if (cfg.vector_file_path.empty() && !cfg.db_path.empty()) {

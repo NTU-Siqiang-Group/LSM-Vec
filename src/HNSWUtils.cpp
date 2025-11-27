@@ -176,7 +176,6 @@ void insertFromFile(ROCKSDB_NAMESPACE::HNSWGraph &graph, const std::string &file
     size_t node_count = 0;
 
     auto start = std::chrono::high_resolution_clock::now();
-    auto end = std::chrono::high_resolution_clock::now();
 
     bool isFvecs = filename.find(".fvecs") != std::string::npos;
     bool isBvecs = filename.find(".bvecs") != std::string::npos;
@@ -202,23 +201,18 @@ void insertFromFile(ROCKSDB_NAMESPACE::HNSWGraph &graph, const std::string &file
         {
             floatVec.resize(dim);
             input.read(reinterpret_cast<char *>(floatVec.data()), dim * sizeof(float));
-            finalVec = floatVec; // fvecs直接是float，不需要转换
+            finalVec = floatVec;
         }
         else if (isBvecs)
         {
             std::vector<uint8_t> byteVec(dim);
             input.read(reinterpret_cast<char *>(byteVec.data()), dim * sizeof(uint8_t));
 
-            // 归一化到0~1（或其他标准化策略，取决于你的HNSW实现需求）
+            
             for (int j = 0; j < dim; ++j)
             {
-                finalVec[j] = static_cast<float>(byteVec[j]); // 不归一化直接放
+                finalVec[j] = static_cast<float>(byteVec[j]);
             }
-        }
-
-        if (node_count == 99999000)
-        {
-            start = std::chrono::high_resolution_clock::now(); // 只对后面1000个点计时
         }
 
         graph.insertNode(static_cast<int>(node_count), finalVec);
@@ -231,9 +225,9 @@ void insertFromFile(ROCKSDB_NAMESPACE::HNSWGraph &graph, const std::string &file
         ++node_count;
     }
 
-    end = std::chrono::high_resolution_clock::now();
+    auto end = std::chrono::high_resolution_clock::now();
     double duration = std::chrono::duration<double>(end - start).count();
-    std::cout << "Inserting 1000 nodes took " << duration << " seconds" << std::endl;
+    std::cout << "Building "<< node_count <<" nodes took " << duration << " seconds" << std::endl;
 
     input.close();
 }

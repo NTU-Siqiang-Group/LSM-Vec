@@ -30,7 +30,7 @@ int main(int argc, char* argv[])
 
     ROCKSDB_NAMESPACE::HNSWGraph hnsw(
         cfg.M, cfg.Mmax, cfg.Ml, cfg.efConstruction,
-        &asterDB, outFile, cfg.vector_file_path, dim
+        &asterDB, outFile, cfg.vector_file_path, dim, cfg
     );
 
     std::cout << "Inserting nodes from " << cfg.input_file_path << std::endl;
