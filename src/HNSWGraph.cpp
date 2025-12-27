@@ -72,7 +72,7 @@ namespace ROCKSDB_NAMESPACE
 {
 
     HNSWGraph::HNSWGraph(int M, int Mmax, int Ml, float efConstruction, RocksGraph *db, std::ostream &outFile, std::string vectorfilePath, int vectordim, const Config& cfg)
-        : M(M), Mmax(Mmax), Ml(Ml), efConstruction(efConstruction), db(db), outFile(outFile), gen(rd()), dist(0, 1), maxLayer(-1), entryPoint(-1), ioTime(0.0), indexingTime(0.0)
+        : M(M), Mmax(Mmax), Ml(Ml), efConstruction(efConstruction), db(db), outFile(outFile), gen(rd()), dist(0, 1), maxLayer(-1), entryPoint(-1)
     {
         gen.seed(12345);
         //vectorStorage = std::make_unique<VectorStorage>(vectorfilePath, vectordim, 100000000);
@@ -118,8 +118,6 @@ namespace ROCKSDB_NAMESPACE
     // Inserts a node into the HNSW graph
     void HNSWGraph::insertNodeOld(int id, const std::vector<float> &point)
     {
-        auto start = std::chrono::high_resolution_clock::now();
-
         vectorStorage->storeVectorToDisk(id, point);         
 
         int highestLayer = randomLevel();
@@ -141,7 +139,6 @@ namespace ROCKSDB_NAMESPACE
 
             auto end = std::chrono::high_resolution_clock::now();
             // std::cout << "Inserting node ID: " << id << " with point size: " << point.size() << " took " << std::chrono::duration<double>(end - start).count() << " seconds" << std::endl;
-            indexingTime += std::chrono::duration<double>(end - start).count();
             return;
         }
 
@@ -246,14 +243,11 @@ namespace ROCKSDB_NAMESPACE
             std::cout << "Updated entry point to node " << id << " at layer " << highestLayer << std::endl;
         }
 
-        auto end = std::chrono::high_resolution_clock::now();
         // std::cout << "Inserting node ID: " << id << " with point size: " << point.size() << " took " << std::chrono::duration<double>(end - start).count() << " seconds" << std::endl;
-        indexingTime += std::chrono::duration<double>(end - start).count();
     }
 
     void HNSWGraph::insertNode(int id, const std::vector<float> &point)
     {
-        auto start = std::chrono::high_resolution_clock::now();
         bool vectorStored = false;  // NEW: track whether we've stored this vector
 
         int highestLayer = randomLevel();
@@ -278,8 +272,6 @@ namespace ROCKSDB_NAMESPACE
             vectorStorage->storeVectorToDisk(id, point, sectionKey);
             vectorStored = true;
 
-            auto end = std::chrono::high_resolution_clock::now();
-            indexingTime += std::chrono::duration<double>(end - start).count();
             return;
         }
 
@@ -333,7 +325,7 @@ namespace ROCKSDB_NAMESPACE
                 linkNeighborsAsterDB(id, point, selectedNeighbors);
             }
 
-            // ---- Shrink connections (unchanged) ----
+            // ---- Shrink connections ----
             if (l > 0)
             {
                 for (int neighbor : selectedNeighbors)
@@ -401,8 +393,6 @@ namespace ROCKSDB_NAMESPACE
             vectorStorage->storeVectorToDisk(id, point, sectionKey);
         }
 
-        auto end = std::chrono::high_resolution_clock::now();
-        indexingTime += std::chrono::duration<double>(end - start).count();
     }
 
     // Links neighbors for upper layers stored in memory
@@ -850,21 +840,21 @@ namespace ROCKSDB_NAMESPACE
         return nearestNeighbors[0];
     }
 
-    void HNSWGraph::printStatistics() const
-    {
-        std::cout << "Indexing Time: " << indexingTime << " seconds" << std::endl;
+    // void HNSWGraph::printStatistics() const
+    // {
+    //     std::cout << "Indexing Time: " << indexingTime << " seconds" << std::endl;
 
-        std::cout << "-------graph part------" << std::endl;
-        std::cout << "Total Aster I/O Time: " << ioTime << " seconds" << std::endl;
-        std::cout << "Read Operations: " << readIOCount << ", Time: " << readIOTime << " seconds" << std::endl;
-        std::cout << "Write Node Operations: " << writenodeIOCount << ", Time: " << writenodeIOTime << " seconds" << std::endl;
-        std::cout << "Add Edge Operations: " << addedgeIOCount << ", Time: " << addedgeIOTime << " seconds" << std::endl;
-        std::cout << "Delete Edge Operations: " << deleteedgeIOCount << ", Time: " << deleteedgeIOTime << " seconds" << std::endl;
-        std::cout << "-------vector part------" << std::endl;
-        std::cout << "Total Vector I/O Time: " << vecreadtime + vecwritetime << " seconds" << std::endl;
-        std::cout << "Vector Read Operations: " << vecreadcount << ", Time: " << vecreadtime << " seconds" << std::endl;
-        std::cout << "Vector Write Operations: " << vecwritecount << ", Time: " << vecwritetime << " seconds" << std::endl;
-        std::cout << std::endl;
-        std::cout << std::endl;
-    }
+    //     std::cout << "-------graph part------" << std::endl;
+    //     std::cout << "Total Aster I/O Time: " << ioTime << " seconds" << std::endl;
+    //     std::cout << "Read Operations: " << readIOCount << ", Time: " << readIOTime << " seconds" << std::endl;
+    //     std::cout << "Write Node Operations: " << writenodeIOCount << ", Time: " << writenodeIOTime << " seconds" << std::endl;
+    //     std::cout << "Add Edge Operations: " << addedgeIOCount << ", Time: " << addedgeIOTime << " seconds" << std::endl;
+    //     std::cout << "Delete Edge Operations: " << deleteedgeIOCount << ", Time: " << deleteedgeIOTime << " seconds" << std::endl;
+    //     std::cout << "-------vector part------" << std::endl;
+    //     std::cout << "Total Vector I/O Time: " << vecreadtime + vecwritetime << " seconds" << std::endl;
+    //     std::cout << "Vector Read Operations: " << vecreadcount << ", Time: " << vecreadtime << " seconds" << std::endl;
+    //     std::cout << "Vector Write Operations: " << vecwritecount << ", Time: " << vecwritetime << " seconds" << std::endl;
+    //     std::cout << std::endl;
+    //     std::cout << std::endl;
+    // }
 } // namespace ROCKSDB_NAMESPACE

@@ -7,6 +7,7 @@
 #include <iostream>
 #include "DiskVector.h"
 #include "Config.h"
+#include "Statistics.h"
 
 namespace ROCKSDB_NAMESPACE
 {
@@ -19,6 +20,8 @@ namespace ROCKSDB_NAMESPACE
             std::vector<float> point;
             std::unordered_map<int, std::vector<int>> neighbors; // Layer -> neighbors
         };
+
+        HNSWStats stats;
 
         bool useHeuristicNeighborSelection_ = true;
 
@@ -36,29 +39,9 @@ namespace ROCKSDB_NAMESPACE
         void printIndexStatus() const;
         void printStatistics() const;
 
-        double ioTime;       // I/O TIME(SECONDS)
-        double indexingTime; // INDEXING TIME(SECONDS)
-        size_t readIOCount = 0;
-        size_t writenodeIOCount = 0;
-        size_t addedgeIOCount = 0;
-        size_t deleteedgeIOCount = 0;
-        double readIOTime = 0.0;
-        double writenodeIOTime = 0.0;
-        double addedgeIOTime = 0.0;
-        double deleteedgeIOTime = 0.0;
-        size_t readVertexPropertyCount = 0;  // db->GetVertexProperty COUTS
-        size_t readEdgesCount = 0;           // db->GetAllEdges COUTS
-        double readVertexPropertyTime = 0.0; // db->GetVertexProperty TIME
-        double readEdgesTime = 0.0;          // db->GetAllEdges TIME
         std::string vectorfilePath;
         int vectordim = 0;
         std::unique_ptr<IVectorStorage> vectorStorage;
-
-        size_t vecreadcount = 0;
-        double vecreadtime = 0.0;
-
-        size_t vecwritecount = 0;
-        double vecwritetime = 0.0;
 
     private:
         int randomLevel();
