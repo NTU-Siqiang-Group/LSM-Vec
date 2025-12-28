@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.10)
 
 # Project name and version
-project(HNSWAsterDBProject)
+project(LSMVEC)
 
 # Set C++ standard to C++17 and build type
 set(CMAKE_CXX_STANDARD 17)
@@ -11,7 +11,7 @@ set(CMAKE_BUILD_TYPE Release)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -Wall -Wextra -O2")
 
-set(ASTER_ROCKSDB_ROOT "/home/dhmo/Aster")
+set(ASTER_ROCKSDB_ROOT ${CMAKE_SOURCE_DIR}/lib/aster)
 
 find_library(ROCKSDB_LIB rocksdb
     HINTS
@@ -56,9 +56,9 @@ set(SOURCES
 )
 
 # Add the executable target
-add_executable(hnsw_asterdb ${SOURCES})
+add_executable(lsm_vec ${SOURCES})
 
-target_include_directories(hnsw_asterdb PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(lsm_vec PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 find_library(ZSTD_LIB zstd
     HINTS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib
@@ -70,7 +70,7 @@ endif()
 
 message(STATUS "Using ZSTD library at ${ZSTD_LIB}")
 
-target_link_libraries(hnsw_asterdb PRIVATE
+target_link_libraries(lsm_vec PRIVATE
     ${ROCKSDB_LIB}
     ${ZSTD_LIB}  
     snappy
@@ -82,6 +82,6 @@ target_link_libraries(hnsw_asterdb PRIVATE
 )
 
 # Set output directory for the executable
-set_target_properties(hnsw_asterdb PROPERTIES
+set_target_properties(lsm_vec PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
