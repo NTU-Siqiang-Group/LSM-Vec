@@ -68,29 +68,41 @@ float gaussian(  // r.v. from Gaussian(mean, sigma)
     return x;
 }
 
-namespace ROCKSDB_NAMESPACE
+namespace lsm_vec
 {
+using namespace ROCKSDB_NAMESPACE;
 
-    HNSWGraph::HNSWGraph(int M, int Mmax, int Ml, float efConstruction, RocksGraph *db, std::ostream &outFile, std::string vectorfilePath, int vectordim, const Config& cfg)
-        : M(M), Mmax(Mmax), Ml(Ml), efConstruction(efConstruction), db(db), outFile(outFile), gen(rd()), dist(0, 1), maxLayer(-1), entryPoint(-1)
+    HNSWGraph::HNSWGraph(int M, int Mmax, int Ml, float efConstruction, std::ostream &outFile, std::string vectorfilePath, int vectordim, const Config& cfg_)
+        : M(M), Mmax(Mmax), Ml(Ml), efConstruction(efConstruction), outFile(outFile), gen(rd()), dist(0, 1), maxLayer(-1), entryPoint(-1)
     {
         gen.seed(12345);
+
+        options_.create_if_missing = true;
+        options_.db_paths.emplace_back(rocksdb::DbPath(cfg_.db_path, cfg_.db_target_size));
+        options_.statistics = rocksdb::CreateDBStatistics();
+
+        db_ = std::make_unique<rocksdb::RocksGraph>(
+            options_,
+            EDGE_UPDATE_EAGER,
+            ENCODING_TYPE_NONE,
+            true
+        );
         //vectorStorage = std::make_unique<VectorStorage>(vectorfilePath, vectordim, 100000000);
         //vectorStorage = std::make_unique<VectorStorage>(vectorfilePath, vectordim);
-        if (cfg.vector_storage_type == 1) {
+        if (cfg_.vector_storage_type == 1) {
             printf("Using page-based vector storage layout\n");
             vectorStorage = std::make_unique<PagedVectorStorage>(
-                cfg.vector_file_path,
+                cfg_.vector_file_path,
                 static_cast<size_t>(vectordim),
-                cfg.vec_file_capacity,
-                cfg.paged_max_cached_pages
+                cfg_.vec_file_capacity,
+                cfg_.paged_max_cached_pages
             );
         } else {
             printf("Using plain vector storage layout\n");
             vectorStorage = std::make_unique<BasicVectorStorage>(
-                cfg.vector_file_path,
+                cfg_.vector_file_path,
                 static_cast<size_t>(vectordim),
-                cfg.vec_file_capacity
+                cfg_.vec_file_capacity
             );
         }
     }
@@ -116,7 +128,7 @@ namespace ROCKSDB_NAMESPACE
     }
 
     // Inserts a node into the HNSW graph
-    void HNSWGraph::insertNodeOld(int id, const std::vector<float> &point)
+    void HNSWGraph::insertNodeOld(node_id_t id, const std::vector<float> &point)
     {
         vectorStorage->storeVectorToDisk(id, point);         
 
@@ -126,7 +138,7 @@ namespace ROCKSDB_NAMESPACE
         if (highestLayer > 0)
         {
             Node newNode{id, point};
-            newNode.neighbors = std::unordered_map<int, std::vector<int>>();
+            newNode.neighbors = std::unordered_map<node_id_t, std::vector<node_id_t>>();
             nodes[id] = newNode;
         }
 
@@ -146,7 +158,7 @@ namespace ROCKSDB_NAMESPACE
 
         for (int l = maxLayer; l > highestLayer; --l)
         {
-            std::vector<int> closest = searchLayer(point, currentEntryPoint, 1, l);
+            std::vector<node_id_t> closest = searchLayer(point, currentEntryPoint, 1, l);
             if (!closest.empty())
             {
                 currentEntryPoint = closest[0];
@@ -155,8 +167,8 @@ namespace ROCKSDB_NAMESPACE
 
         for (int l = std::min(maxLayer, highestLayer); l >= 0; --l)
         {
-            std::vector<int> neighbors = searchLayer(point, currentEntryPoint, efConstruction, l);
-            std::vector<int> selectedNeighbors;
+            std::vector<node_id_t> neighbors = searchLayer(point, currentEntryPoint, efConstruction, l);
+            std::vector<node_id_t> selectedNeighbors;
             if(l > 0)
                 selectedNeighbors = selectNeighbors(point, neighbors, M, l);
             else
@@ -178,10 +190,10 @@ namespace ROCKSDB_NAMESPACE
                 for (int neighbor : selectedNeighbors)
                 {
                     // eConn ← neighbourhood(e) at layer l
-                    std::vector<int> eConn = nodes[neighbor].neighbors[l];
+                    std::vector<node_id_t> eConn = nodes[neighbor].neighbors[l];
                     if (eConn.size() > M)
                     {
-                        std::vector<int> eNewConn = selectNeighbors(nodes[neighbor].point, eConn, M, l);
+                        std::vector<node_id_t> eNewConn = selectNeighbors(nodes[neighbor].point, eConn, M, l);
                         // set neighbourhood(e) at layer l to eNewConn
                         nodes[neighbor].neighbors[l] = eNewConn;
                     }
@@ -193,26 +205,26 @@ namespace ROCKSDB_NAMESPACE
                 {
                     // eConn ← neighbourhood(e) at layer l
                     rocksdb::Edges edges;
-                    db->GetAllEdges(neighbor, &edges);
+                    db_->GetAllEdges(neighbor, &edges);
 
                     if (edges.num_edges_out > Mmax)
                     {
-                        //db->edge_update_policy_ = EDGE_UPDATE_EAGER;
-                        std::vector<int> eConns;
+                        //db_->edge_update_policy_ = EDGE_UPDATE_EAGER;
+                        std::vector<node_id_t> eConns;
                         for (uint32_t i = 0; i < edges.num_edges_out; ++i)
                         {
                             eConns.push_back(edges.nxts_out[i].nxt);
                         }
                         /*
                         std::vector<rocksdb::Property> props;
-                        db->GetVertexProperty(neighbor, props);
+                        db_->GetVertexProperty(neighbor, props);
                         */
                         //std::vector<float> cur_point1 = nodes[neighbor].point;
                         std::vector<float> cur_point2;
 
                         vectorStorage->readVectorFromDisk(neighbor, cur_point2);
 
-                        std::vector<int> eNewConn = selectNeighbors(cur_point2, eConns, Mmax, l);
+                        std::vector<node_id_t> eNewConn = selectNeighbors(cur_point2, eConns, Mmax, l);
                         // std::cout << "eConns size: " << eConns.size() << std::endl;
                         // std::cout << "eNewConn size: " << eNewConn.size() << std::endl;
                         // set neighbourhood(e) at layer l to eNewConn
@@ -220,12 +232,12 @@ namespace ROCKSDB_NAMESPACE
                         {
                             if (std::find(eNewConn.begin(), eNewConn.end(), node) == eNewConn.end())
                             {
-                                db->DeleteEdge(neighbor, node);
-                                db->DeleteEdge(node, neighbor);
+                                db_->DeleteEdge(neighbor, node);
+                                db_->DeleteEdge(node, neighbor);
                             }
                         }
                         // rocksdb::Edges edges;
-                        // db->GetAllEdges(neighbor, &edges);
+                        // db_->GetAllEdges(neighbor, &edges);
                         // std::cout << "edges.num_edges_out: " << edges.num_edges_out << std::endl;
                     }
                 }
@@ -246,7 +258,7 @@ namespace ROCKSDB_NAMESPACE
         // std::cout << "Inserting node ID: " << id << " with point size: " << point.size() << " took " << std::chrono::duration<double>(end - start).count() << " seconds" << std::endl;
     }
 
-    void HNSWGraph::insertNode(int id, const std::vector<float> &point)
+    void HNSWGraph::insertNode(node_id_t id, const std::vector<float> &point)
     {
         bool vectorStored = false;  // NEW: track whether we've stored this vector
 
@@ -255,7 +267,7 @@ namespace ROCKSDB_NAMESPACE
         if (highestLayer > 0)
         {
             Node newNode{id, point};
-            newNode.neighbors = std::unordered_map<int, std::vector<int>>();
+            newNode.neighbors = std::unordered_map<node_id_t, std::vector<node_id_t>>();
             nodes[id] = newNode;
         }
 
@@ -268,19 +280,19 @@ namespace ROCKSDB_NAMESPACE
             linkNeighborsAsterDB(id, point, {});
 
             // For the first node, we can just use id as sectionKey
-            int sectionKey = id;
+            node_id_t sectionKey = id;
             vectorStorage->storeVectorToDisk(id, point, sectionKey);
             vectorStored = true;
 
             return;
         }
 
-        int currentEntryPoint = entryPoint;
+        node_id_t currentEntryPoint = entryPoint;
 
         // ----- Search down from top layer to (highestLayer+1) to choose entry -----
         for (int l = maxLayer; l > highestLayer; --l)
         {
-            std::vector<int> closest = searchLayer(point, currentEntryPoint, 1, l);
+            std::vector<node_id_t> closest = searchLayer(point, currentEntryPoint, 1, l);
             if (!closest.empty())
             {
                 currentEntryPoint = closest[0];
@@ -289,14 +301,14 @@ namespace ROCKSDB_NAMESPACE
 
         // Initial guess for sectionKey: if we have upper layers, use currentEntryPoint,
         // otherwise fall back to global entryPoint.
-        int sectionKey = (maxLayer >= 1 ? currentEntryPoint : entryPoint);
+        node_id_t sectionKey = (maxLayer >= 1 ? currentEntryPoint : entryPoint);
 
         // ----- From min(maxLayer, highestLayer) ... down to 0 -----
         for (int l = std::min(maxLayer, highestLayer); l >= 0; --l)
         {
-            std::vector<int> neighbors =
+            std::vector<node_id_t> neighbors =
                 searchLayer(point, currentEntryPoint, efConstruction, l);
-            std::vector<int> selectedNeighbors =
+            std::vector<node_id_t> selectedNeighbors =
                 selectNeighbors(point, neighbors, M, l);
 
             // If we are at level 1, refine sectionKey using closest neighbor at l=1.
@@ -330,10 +342,10 @@ namespace ROCKSDB_NAMESPACE
             {
                 for (int neighbor : selectedNeighbors)
                 {
-                    std::vector<int> eConn = nodes[neighbor].neighbors[l];
+                    std::vector<node_id_t> eConn = nodes[neighbor].neighbors[l];
                     if (eConn.size() > static_cast<size_t>(Mmax))
                     {
-                        std::vector<int> eNewConn =
+                        std::vector<node_id_t> eNewConn =
                             selectNeighbors(nodes[neighbor].point, eConn, Mmax, l);
                         nodes[neighbor].neighbors[l] = std::move(eNewConn);
                     }
@@ -341,14 +353,14 @@ namespace ROCKSDB_NAMESPACE
             }
             else // l == 0
             {
-                for (int neighbor : selectedNeighbors)
+                for (node_id_t neighbor : selectedNeighbors)
                 {
                     rocksdb::Edges edges;
-                    db->GetAllEdges(neighbor, &edges);
+                    db_->GetAllEdges(neighbor, &edges);
 
                     if (edges.num_edges_out > static_cast<uint32_t>(Mmax))
                     {
-                        std::vector<int> eConns;
+                        std::vector<node_id_t> eConns;
                         eConns.reserve(edges.num_edges_out);
                         for (uint32_t i = 0; i < edges.num_edges_out; ++i)
                         {
@@ -358,15 +370,15 @@ namespace ROCKSDB_NAMESPACE
                         std::vector<float> cur_point2;
                         vectorStorage->readVectorFromDisk(neighbor, cur_point2);
 
-                        std::vector<int> eNewConn =
+                        std::vector<node_id_t> eNewConn =
                             selectNeighbors(cur_point2, eConns, Mmax, l);
 
                         for (auto node : eConns)
                         {
                             if (std::find(eNewConn.begin(), eNewConn.end(), node) == eNewConn.end())
                             {
-                                db->DeleteEdge(neighbor, node);
-                                db->DeleteEdge(node, neighbor);
+                                db_->DeleteEdge(neighbor, node);
+                                db_->DeleteEdge(node, neighbor);
                             }
                         }
                     }
@@ -396,29 +408,29 @@ namespace ROCKSDB_NAMESPACE
     }
 
     // Links neighbors for upper layers stored in memory
-    void HNSWGraph::linkNeighbors(int nodeid, const std::vector<int> &neighbors, int layer)
+    void HNSWGraph::linkNeighbors(node_id_t id, const std::vector<node_id_t> &neighbors, int layer)
     {
-        for (int neighbor : neighbors)
+        for (node_id_t neighbor : neighbors)
         {
-            nodes[neighbor].neighbors[layer].push_back(nodeid);
-            nodes[nodeid].neighbors[layer].push_back(neighbor);
+            nodes[neighbor].neighbors[layer].push_back(id);
+            nodes[id].neighbors[layer].push_back(neighbor);
         }
     }
 
-    void HNSWGraph::linkNeighborsAsterDB(int nodeId, const std::vector<float> &point, const std::vector<int> &neighbors)
+    void HNSWGraph::linkNeighborsAsterDB(node_id_t id, const std::vector<float> &point, const std::vector<node_id_t> &neighbors)
     {
-        db->AddVertex(nodeId);
+        db_->AddVertex(id);
 
-        for (int neighbor : neighbors)
+        for (node_id_t neighbor : neighbors)
         {
-            db->AddEdge(nodeId, neighbor);
-            db->AddEdge(neighbor, nodeId);
+            db_->AddEdge(id, neighbor);
+            db_->AddEdge(neighbor, id);
         }
     }
 
-    std::vector<int> HNSWGraph::selectNeighbors(
+    std::vector<node_id_t> HNSWGraph::selectNeighbors(
         const std::vector<float> &point,
-        const std::vector<int> &candidates,
+        const std::vector<node_id_t> &candidates,
         int M,
         int layer)
     {
@@ -430,7 +442,7 @@ namespace ROCKSDB_NAMESPACE
     }
 
     // Selects neighbors based on distance and pruning logic
-    std::vector<int> HNSWGraph::selectNeighborsSimple(const std::vector<float> &point, const std::vector<int> &candidates, int M, int layer)
+    std::vector<node_id_t> HNSWGraph::selectNeighborsSimple(const std::vector<float> &point, const std::vector<node_id_t> &candidates, int M, int layer)
     {
 
         if (candidates.size() <= M)
@@ -439,8 +451,8 @@ namespace ROCKSDB_NAMESPACE
         }
         else
         {
-            std::priority_queue<std::pair<float, int>> topCandidates;
-            for (int candidate : candidates)
+            std::priority_queue<std::pair<float, node_id_t>> topCandidates;
+            for (node_id_t candidate : candidates)
             {
                 float dist = 0.0;
                 if (layer > 0)
@@ -461,7 +473,7 @@ namespace ROCKSDB_NAMESPACE
                 }
             }
 
-            std::vector<int> selectedNeighbors;
+            std::vector<node_id_t> selectedNeighbors;
             while (!topCandidates.empty())
             {
                 selectedNeighbors.push_back(topCandidates.top().second);
@@ -471,9 +483,9 @@ namespace ROCKSDB_NAMESPACE
         }
     }
 
-    std::vector<int> HNSWGraph::selectNeighborsHeuristic1(
+    std::vector<node_id_t> HNSWGraph::selectNeighborsHeuristic1(
         const std::vector<float> &point,
-        const std::vector<int> &candidates,
+        const std::vector<node_id_t> &candidates,
         int M,
         int layer)
     {
@@ -483,7 +495,7 @@ namespace ROCKSDB_NAMESPACE
         }
 
         struct CandidateInfo {
-            int   id;
+            node_id_t   id;
             float distToQuery;
         };
 
@@ -492,9 +504,9 @@ namespace ROCKSDB_NAMESPACE
 
         // Optional cache for layer 0 to avoid reading the same vectors multiple times.
         // For layer > 0 we can use nodes[id].point directly.
-        std::unordered_map<int, std::vector<float>> vecCache;
+        std::unordered_map<node_id_t, std::vector<float>> vecCache;
 
-        auto getVector = [&](int id) -> const std::vector<float>& {
+        auto getVector = [&](node_id_t id) -> const std::vector<float>& {
             if (layer > 0) {
                 return nodes[id].point;
             } else {
@@ -510,7 +522,7 @@ namespace ROCKSDB_NAMESPACE
         };
 
         // 1) Precompute distances query -> candidate
-        for (int id : candidates)
+        for (node_id_t id : candidates)
         {
             const auto& candVec = getVector(id);
             float d = euclideanDistance(point, candVec);
@@ -527,20 +539,20 @@ namespace ROCKSDB_NAMESPACE
         );
 
         // 3) Heuristic (diversified neighbor selection):
-        std::vector<int> selected;
+        std::vector<node_id_t> selected;
         selected.reserve(M);
-        std::vector<int> rejected;
+        std::vector<node_id_t> rejected;
 
         for (const auto& cand : candInfos)
         {
             if (selected.size() >= static_cast<size_t>(M))
                 break;
 
-            int id = cand.id;
+            node_id_t id = cand.id;
             float dist_q = cand.distToQuery;
 
             bool good = true;
-            for (int sid : selected)
+            for (node_id_t sid : selected)
             {
                 const auto& v1 = getVector(sid);
                 const auto& v2 = getVector(id);
@@ -562,7 +574,7 @@ namespace ROCKSDB_NAMESPACE
         // 4) If we still have fewer than M neighbors, fill from rejected,
         //    preserving the order by distToQuery (because 'rejected' was
         //    filled while scanning candInfos in sorted order).
-        for (int id : rejected)
+        for (node_id_t id : rejected)
         {
             if (selected.size() >= static_cast<size_t>(M))
                 break;
@@ -572,9 +584,9 @@ namespace ROCKSDB_NAMESPACE
         return selected;
     }
 
-    std::vector<int> HNSWGraph::selectNeighborsHeuristic2(
+    std::vector<node_id_t> HNSWGraph::selectNeighborsHeuristic2(
         const std::vector<float> &point,
-        const std::vector<int> &candidates,
+        const std::vector<node_id_t> &candidates,
         int M,
         int layer)
     {
@@ -584,7 +596,7 @@ namespace ROCKSDB_NAMESPACE
         }
 
         struct CandidateInfo {
-            int   id;
+            node_id_t   id;
             float distToQuery;
         };
 
@@ -593,9 +605,9 @@ namespace ROCKSDB_NAMESPACE
 
         // Optional cache for layer 0 to avoid reading the same vectors multiple times.
         // For layer > 0 we can use nodes[id].point directly.
-        std::unordered_map<int, std::vector<float>> vecCache;
+        std::unordered_map<node_id_t, std::vector<float>> vecCache;
 
-        auto getVector = [&](int id) -> const std::vector<float>& {
+        auto getVector = [&](node_id_t id) -> const std::vector<float>& {
             if (layer > 0) {
                 return nodes[id].point;
             } else {
@@ -611,7 +623,7 @@ namespace ROCKSDB_NAMESPACE
         };
 
         // 1) Precompute distances query -> candidate
-        for (int id : candidates)
+        for (node_id_t id : candidates)
         {
             const auto& candVec = getVector(id);
             float d = euclideanDistance(point, candVec);
@@ -628,20 +640,20 @@ namespace ROCKSDB_NAMESPACE
         );
 
         // 3) Heuristic (diversified neighbor selection):
-        std::vector<int> selected;
+        std::vector<node_id_t> selected;
         selected.reserve(M);
-        std::vector<int> rejected;
+        std::vector<node_id_t> rejected;
 
         for (const auto& cand : candInfos)
         {
             if (selected.size() >= static_cast<size_t>(M))
                 break;
 
-            int id = cand.id;
+            node_id_t id = cand.id;
             float dist_q = cand.distToQuery;
 
             bool good = true;
-            for (int sid : selected)
+            for (node_id_t sid : selected)
             {
                 const auto& v1 = getVector(sid);
                 const auto& v2 = getVector(id);
@@ -663,16 +675,16 @@ namespace ROCKSDB_NAMESPACE
         return selected;
     }
 
-    std::vector<int> HNSWGraph::searchLayer(const std::vector<float> &queryPoint, int entryPoint, int ef, int layer)
+    std::vector<node_id_t> HNSWGraph::searchLayer(const std::vector<float> &queryPoint, node_id_t entryPoint, int ef, int layer)
     {
         // set of visited elements
-        std::unordered_set<int> visited;
+        std::unordered_set<node_id_t> visited;
 
         // set of candidates
-        std::priority_queue<std::pair<float, int>> candidates; // C: set of candidates
+        std::priority_queue<std::pair<float, node_id_t>> candidates; // C: set of candidates
 
         // dynamic list of found nearest neighbors
-        std::priority_queue<std::pair<float, int>> nearestNeighbors; // W: dynamic list of found nearest neighbors
+        std::priority_queue<std::pair<float, node_id_t>> nearestNeighbors; // W: dynamic list of found nearest neighbors
 
         if (layer > 0)
         {
@@ -685,7 +697,7 @@ namespace ROCKSDB_NAMESPACE
             while (!candidates.empty())
             {
                 // get the nearest candidate, extract nearest element from C
-                int current = candidates.top().second;
+                node_id_t current = candidates.top().second;
                 float currentDist = -candidates.top().first;
                 candidates.pop();
 
@@ -695,7 +707,7 @@ namespace ROCKSDB_NAMESPACE
                 {
                     break;
                 }
-                for (int neighbor : nodes[current].neighbors[layer])
+                for (node_id_t neighbor : nodes[current].neighbors[layer])
                 {
                     if (visited.find(neighbor) == visited.end())
                     {
@@ -713,7 +725,7 @@ namespace ROCKSDB_NAMESPACE
                     }
                 }
             }
-            std::vector<std::pair<float, int>> temp;
+            std::vector<std::pair<float, node_id_t>> temp;
 
             
             while (!nearestNeighbors.empty())
@@ -722,12 +734,12 @@ namespace ROCKSDB_NAMESPACE
                 nearestNeighbors.pop();
             }
 
-            std::sort(temp.begin(), temp.end(), [](const std::pair<float, int> &a, const std::pair<float, int> &b)
+            std::sort(temp.begin(), temp.end(), [](const std::pair<float, node_id_t> &a, const std::pair<float, node_id_t> &b)
                       {
                           return a.first < b.first;
                       });
 
-            std::vector<int> result;
+            std::vector<node_id_t> result;
             for (const auto &pair : temp)
             {
                 result.push_back(pair.second);
@@ -751,7 +763,7 @@ namespace ROCKSDB_NAMESPACE
             {
                 // extract nearest element from C to q
                 // get furthest element from W to q
-                int current = candidates.top().second;
+                node_id_t current = candidates.top().second;
                 float currentDist = -candidates.top().first;
                 candidates.pop();
 
@@ -763,7 +775,7 @@ namespace ROCKSDB_NAMESPACE
                 }
 
                 rocksdb::Edges edges;
-                db->GetAllEdges(current, &edges);
+                db_->GetAllEdges(current, &edges);
 
                 std::vector<int> neighbors;
                 for (uint32_t i = 0; i < edges.num_edges_out; ++i)
@@ -771,7 +783,7 @@ namespace ROCKSDB_NAMESPACE
                     neighbors.push_back(edges.nxts_out[i].nxt);
                 }
 
-                for (int neighbor : neighbors)
+                for (node_id_t neighbor : neighbors)
                 {
                     if (visited.find(neighbor) == visited.end())
                     {
@@ -793,7 +805,7 @@ namespace ROCKSDB_NAMESPACE
                     }
                 }
             }
-            std::vector<std::pair<float, int>> temp;
+            std::vector<std::pair<float, node_id_t>> temp;
 
             while (!nearestNeighbors.empty())
             {
@@ -801,12 +813,12 @@ namespace ROCKSDB_NAMESPACE
                 nearestNeighbors.pop();
             }
 
-            std::sort(temp.begin(), temp.end(), [](const std::pair<float, int> &a, const std::pair<float, int> &b)
+            std::sort(temp.begin(), temp.end(), [](const std::pair<float, node_id_t> &a, const std::pair<float, node_id_t> &b)
                       {
                           return a.first < b.first; // 比较距离
                       });
 
-            std::vector<int> result;
+            std::vector<node_id_t> result;
             for (const auto &pair : temp)
             {
                 result.push_back(pair.second);
@@ -821,18 +833,18 @@ namespace ROCKSDB_NAMESPACE
     }
 
     // Performs a greedy search to find the closest neighbor at a specific layer
-    int HNSWGraph::KNNsearch(const std::vector<float> &queryPoint)
+    node_id_t HNSWGraph::KNNsearch(const std::vector<float> &queryPoint)
     {
         // W ← ∅ set for the current nearest elements
-        std::vector<int> nearestNeighbors; // W: dynamic list of found nearest neighbors
+        std::vector<node_id_t> nearestNeighbors; // W: dynamic list of found nearest neighbors
 
         // ep ← get enter point for hnsw
-        int currentEntryPoint = entryPoint;
+        node_id_t currentEntryPoint = entryPoint;
         int currentLayer = maxLayer;
 
         for (int l = maxLayer; l >= 1; --l)
         {
-            std::vector<int> nearestNeighbors = searchLayer(queryPoint, currentEntryPoint, 30, l);
+            std::vector<node_id_t> nearestNeighbors = searchLayer(queryPoint, currentEntryPoint, 30, l);
             currentEntryPoint = nearestNeighbors[0];
         }
         nearestNeighbors = searchLayer(queryPoint, currentEntryPoint, 30, 0);

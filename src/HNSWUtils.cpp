@@ -68,7 +68,7 @@ std::vector<std::vector<int>> readIvecsFile(const std::string &filename)
 }
 
 // Function to insert vectors from a bvecs file into the HNSW graph
-void insertFromBigANNFile(ROCKSDB_NAMESPACE::HNSWGraph &graph, const std::string &filename)
+void insertFromBigANNFile(lsm_vec::HNSWGraph &graph, const std::string &filename)
 {
     auto data = readBvecsFile(filename);
     for (size_t i = 0; i < data.size(); ++i)
@@ -78,7 +78,7 @@ void insertFromBigANNFile(ROCKSDB_NAMESPACE::HNSWGraph &graph, const std::string
 }
 
 // Function to perform queries from a file and compare results with ground truth
-void queryBigANN(ROCKSDB_NAMESPACE::HNSWGraph &graph, const std::string &queryFile, const std::string &groundTruthFile)
+void queryBigANN(lsm_vec::HNSWGraph &graph, const std::string &queryFile, const std::string &groundTruthFile)
 {
     auto queries = readBvecsFile(queryFile);
     auto groundTruth = readIvecsFile(groundTruthFile);
@@ -163,7 +163,7 @@ int getdim(const std::string &filename)
 }
 
 // Function to insert vectors from an fvecs file into the HNSW graph
-void insertFromFile(ROCKSDB_NAMESPACE::HNSWGraph &graph, const std::string &filename)
+void insertFromFile(lsm_vec::HNSWGraph &graph, const std::string &filename)
 {
     std::ifstream input(filename, std::ios::binary);
     if (!input.is_open())
@@ -233,7 +233,7 @@ void insertFromFile(ROCKSDB_NAMESPACE::HNSWGraph &graph, const std::string &file
 }
 
 // Function to perform queries from a file and compare results with ground truth
-void queryAndCompareWithGroundTruth(ROCKSDB_NAMESPACE::HNSWGraph &graph, const std::string &queryFile, const std::string &groundTruthFile)
+void queryAndCompareWithGroundTruth(lsm_vec::HNSWGraph &graph, const std::string &queryFile, const std::string &groundTruthFile)
 {
     auto queries = readFvecsFile(queryFile);
     auto groundTruth = readIvecsFile(groundTruthFile);

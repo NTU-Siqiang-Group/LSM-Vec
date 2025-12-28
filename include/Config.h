@@ -80,7 +80,7 @@ Short aliases:
     static bool isFlag(const std::string& a) { return a.size() > 1 && a[0] == '-'; }
 
     static Config Parse(int argc, char* argv[]) {
-        Config cfg;
+        Config cfg_;
         std::unordered_map<std::string, std::string> kv;
 
         auto put = [&](const std::string& k, const std::string& v){
@@ -127,41 +127,41 @@ Short aliases:
         }
 
         // Load scalar values
-        if (kv.count("db"))                 cfg.db_path = kv["db"];
-        if (kv.count("db-target-size"))     cfg.db_target_size = parseU64(kv["db-target-size"]);
-        if (kv.count("vec"))                cfg.vector_file_path = kv["vec"];
-        if (kv.count("data-dir"))           cfg.data_dir = kv["data-dir"];
-        if (kv.count("name"))               cfg.data_name = kv["name"];
+        if (kv.count("db"))                 cfg_.db_path = kv["db"];
+        if (kv.count("db-target-size"))     cfg_.db_target_size = parseU64(kv["db-target-size"]);
+        if (kv.count("vec"))                cfg_.vector_file_path = kv["vec"];
+        if (kv.count("data-dir"))           cfg_.data_dir = kv["data-dir"];
+        if (kv.count("name"))               cfg_.data_name = kv["name"];
 
-        if (kv.count("out"))                cfg.output_path = kv["out"];
-        if (kv.count("edge-policy"))        cfg.edge_update_policy = kv["edge-policy"];
+        if (kv.count("out"))                cfg_.output_path = kv["out"];
+        if (kv.count("edge-policy"))        cfg_.edge_update_policy = kv["edge-policy"];
 
-        if (kv.count("M"))                  cfg.M = parseI(kv["M"]);
-        if (kv.count("Mmax"))               cfg.Mmax = parseI(kv["Mmax"]);
-        if (kv.count("Ml"))                 cfg.Ml = parseI(kv["Ml"]);
-        if (kv.count("efc"))                cfg.efConstruction = parseF(kv["efc"]);
+        if (kv.count("M"))                  cfg_.M = parseI(kv["M"]);
+        if (kv.count("Mmax"))               cfg_.Mmax = parseI(kv["Mmax"]);
+        if (kv.count("Ml"))                 cfg_.Ml = parseI(kv["Ml"]);
+        if (kv.count("efc"))                cfg_.efConstruction = parseF(kv["efc"]);
 
         // Explicit file overrides (take precedence over any derived path)
-        if (kv.count("base"))               cfg.input_file_path = kv["base"];
-        if (kv.count("query"))              cfg.query_file_path = kv["query"];
-        if (kv.count("truth"))              cfg.groundtruth_file_path = kv["truth"];
-        if (kv.count("vec-storage"))              cfg.vector_storage_type = parseI(kv["vec-storage"]);
+        if (kv.count("base"))               cfg_.input_file_path = kv["base"];
+        if (kv.count("query"))              cfg_.query_file_path = kv["query"];
+        if (kv.count("truth"))              cfg_.groundtruth_file_path = kv["truth"];
+        if (kv.count("vec-storage"))              cfg_.vector_storage_type = parseI(kv["vec-storage"]);
 
         // Default vector_file_path to db_path if not provided
-        if (cfg.vector_file_path.empty() && !cfg.db_path.empty()) {
-            cfg.vector_file_path = cfg.db_path + "/vector.log";
+        if (cfg_.vector_file_path.empty() && !cfg_.db_path.empty()) {
+            cfg_.vector_file_path = cfg_.db_path + "/vector.log";
         }
 
         // Validate we have some way to locate data files:
         // Either (A) all three explicit paths are given, or (B) a data-dir is given
         // (with optional name) so we can derive the three paths.
         bool have_all_explicit =
-            !cfg.input_file_path.empty() &&
-            !cfg.query_file_path.empty() &&
-            !cfg.groundtruth_file_path.empty();
+            !cfg_.input_file_path.empty() &&
+            !cfg_.query_file_path.empty() &&
+            !cfg_.groundtruth_file_path.empty();
 
         if (!have_all_explicit) {
-            if (cfg.data_dir.empty()) {
+            if (cfg_.data_dir.empty()) {
                 std::ostringstream oss;
                 oss << "Missing dataset specification. Provide either:\n"
                     << "  (A) --base --query --truth, or\n"
@@ -175,24 +175,24 @@ Short aliases:
             auto join = [](const fs::path& a, const std::string& b) {
                 return (a.string() + b);
             };
-            auto stem = cfg.data_name; // may be empty
+            auto stem = cfg_.data_name; // may be empty
             auto make_file = [&](const std::string& suffix, const std::string& ext){
                 if (stem.empty()) return suffix + ext;              // e.g., "input.fvecs"
                 return stem + "_" + suffix + ext;                    // e.g., "<name>_input.fvecs"
             };
 
-            if (cfg.input_file_path.empty())
-                cfg.input_file_path = join(cfg.data_dir, make_file(cfg.input_suffix, cfg.input_ext));
-            if (cfg.query_file_path.empty())
-                cfg.query_file_path = join(cfg.data_dir, make_file(cfg.query_suffix, cfg.query_ext));
-            if (cfg.groundtruth_file_path.empty())
-                cfg.groundtruth_file_path = join(cfg.data_dir, make_file(cfg.truth_suffix, cfg.truth_ext));
+            if (cfg_.input_file_path.empty())
+                cfg_.input_file_path = join(cfg_.data_dir, make_file(cfg_.input_suffix, cfg_.input_ext));
+            if (cfg_.query_file_path.empty())
+                cfg_.query_file_path = join(cfg_.data_dir, make_file(cfg_.query_suffix, cfg_.query_ext));
+            if (cfg_.groundtruth_file_path.empty())
+                cfg_.groundtruth_file_path = join(cfg_.data_dir, make_file(cfg_.truth_suffix, cfg_.truth_ext));
         }
 
         // Validate required root options
         std::vector<std::string> missing;
-        if (cfg.db_path.empty())               missing.push_back("--db");
-        if (cfg.vector_file_path.empty())      missing.push_back("--vec"); // normally filled from --db
+        if (cfg_.db_path.empty())               missing.push_back("--db");
+        if (cfg_.vector_file_path.empty())      missing.push_back("--vec"); // normally filled from --db
         if (!missing.empty()) {
             std::ostringstream oss;
             oss << "Missing required options:";
@@ -208,15 +208,15 @@ Short aliases:
 
         // Ensure DB directory exists
         try {
-            fs::create_directories(fs::path(cfg.db_path));
+            fs::create_directories(fs::path(cfg_.db_path));
         } catch (...) {
-            std::cerr << "Failed to create db path: " << cfg.db_path << "\n";
+            std::cerr << "Failed to create db path: " << cfg_.db_path << "\n";
             std::exit(1);
         }
 
         // Ensure parent directory for vector path exists
-        if (!cfg.vector_file_path.empty()) {
-            auto parent = fs::path(cfg.vector_file_path).parent_path();
+        if (!cfg_.vector_file_path.empty()) {
+            auto parent = fs::path(cfg_.vector_file_path).parent_path();
             if (!parent.empty()) {
                 try { fs::create_directories(parent); } catch (...) {
                     std::cerr << "Failed to create parent dir for vec: " << parent << "\n";
@@ -232,13 +232,13 @@ Short aliases:
                 std::exit(1);
             }
         };
-        must_exist(cfg.input_file_path, "input(.fvecs)");
-        must_exist(cfg.query_file_path, "query(.fvecs)");
-        must_exist(cfg.groundtruth_file_path, "groundtruth(.ivecs)");
+        must_exist(cfg_.input_file_path, "input(.fvecs)");
+        must_exist(cfg_.query_file_path, "query(.fvecs)");
+        must_exist(cfg_.groundtruth_file_path, "groundtruth(.ivecs)");
 
         // Ensure parent directory for output file exists
-        if (!cfg.output_path.empty()) {
-            auto parent = fs::path(cfg.output_path).parent_path();
+        if (!cfg_.output_path.empty()) {
+            auto parent = fs::path(cfg_.output_path).parent_path();
             if (!parent.empty()) {
                 try { fs::create_directories(parent); } catch (...) {
                     std::cerr << "Failed to create parent dir for out: " << parent << "\n";
@@ -247,7 +247,7 @@ Short aliases:
             }
         }
 
-        return cfg;
+        return cfg_;
     }
 
 private:

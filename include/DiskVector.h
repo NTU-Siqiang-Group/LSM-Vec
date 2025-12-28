@@ -11,6 +11,10 @@
 #include <cstdint>
 #include <cstdio>
 
+namespace lsm_vec
+{
+using node_id_t = std::uint64_t;
+
 class IVectorStorage {
 public:
     virtual ~IVectorStorage() = default;
@@ -22,25 +26,25 @@ public:
     virtual size_t getCapacity() const = 0;
 
     // Store vector for logical ID 'id' (basic API)
-    virtual void storeVectorToDisk(int id,
+    virtual void storeVectorToDisk(node_id_t id,
                                    const std::vector<float>& vec) = 0;
 
     // Optional section-aware API. Default implementation ignores sectionKey
     // and forwards to the basic store.
-    virtual void storeVectorToDisk(int id,
+    virtual void storeVectorToDisk(node_id_t id,
                                    const std::vector<float>& vec,
-                                   int sectionKey)
+                                   node_id_t sectionKey)
     {
         (void)sectionKey;
         storeVectorToDisk(id, vec);
     }
 
     // Read vector for logical ID 'id'
-    virtual void readVectorFromDisk(int id,
+    virtual void readVectorFromDisk(node_id_t id,
                                     std::vector<float>& vec) = 0;
 
     // Optional prefetch API. Default is no-op.
-    virtual void prefetchByIds(const std::vector<int>& /*ids*/) {}
+    virtual void prefetchByIds(const std::vector<node_id_t>& /*ids*/) {}
 };
 
 class BasicVectorStorage : public IVectorStorage {
@@ -118,10 +122,10 @@ public:
         return totalVectors_;
     }
 
-    void storeVectorToDisk(int id,
+    void storeVectorToDisk(node_id_t id,
                            const std::vector<float>& vector) override
     {
-        if (id < 0 || static_cast<size_t>(id) >= totalVectors_)
+        if (static_cast<size_t>(id) >= totalVectors_)
         {
             throw std::out_of_range("Vector ID out of range.");
         }
@@ -142,10 +146,10 @@ public:
         fileStream_.flush();
     }
 
-    void readVectorFromDisk(int id,
+    void readVectorFromDisk(node_id_t id,
                             std::vector<float>& vector) override
     {
-        if (id < 0 || static_cast<size_t>(id) >= totalVectors_)
+        if (static_cast<size_t>(id) >= totalVectors_)
         {
             throw std::out_of_range("Vector ID out of range.");
         }
@@ -192,8 +196,8 @@ private:
     std::vector<PageMeta> pages_; // pageId -> meta
 
     // Section mappings: external sectionKey -> internal sectionIdx
-    std::unordered_map<int,int> sectionKeyToIdx_;
-    std::vector<int>            sectionIdxToKey_;
+    std::unordered_map<node_id_t,int> sectionKeyToIdx_;
+    std::vector<node_id_t>            sectionIdxToKey_;
 
     // For each sectionIdx, list of pages that still have free slots
     std::unordered_map<int,std::vector<size_t>> sectionOpenPages_;
@@ -323,7 +327,7 @@ private:
     }
 
     // Allocate a free slot for a given sectionKey (creates section/pages on demand).
-    std::pair<size_t,uint16_t> allocateSlotForSection(int sectionKey) {
+    std::pair<size_t,uint16_t> allocateSlotForSection(node_id_t sectionKey) {
         // Map external sectionKey to internal sectionIdx
         int sectionIdx;
         auto it = sectionKeyToIdx_.find(sectionKey);
@@ -418,11 +422,11 @@ public:
     // Store vector with a section hint: 'sectionKey' is derived from HNSW Level-1 entry.
     // We assign the vector to some page belonging to that section; pages are always
     // 4KB and vectors never cross page boundaries.
-    void storeVectorToDisk(int id,
+    void storeVectorToDisk(node_id_t id,
                            const std::vector<float>& vec,
-                           int sectionKey) override
+                           node_id_t sectionKey) override
     {
-        if (id < 0 || static_cast<size_t>(id) >= totalVectors_) {
+        if (static_cast<size_t>(id) >= totalVectors_) {
             throw std::out_of_range("Vector ID out of range.");
         }
         if (vec.size() != dim_) {
@@ -449,14 +453,14 @@ public:
 
     // Backward-compatible version: if you don't care about sections,
     // use ID as the "sectionKey".
-    void storeVectorToDisk(int id, const std::vector<float>& vec) override {
+    void storeVectorToDisk(node_id_t id, const std::vector<float>& vec) override {
         storeVectorToDisk(id, vec, id);
     }
 
     // Read a vector by its logical ID.
-    void readVectorFromDisk(int id, std::vector<float>& vec) override
+    void readVectorFromDisk(node_id_t id, std::vector<float>& vec) override
     {
-        if (id < 0 || static_cast<size_t>(id) >= totalVectors_) {
+        if (static_cast<size_t>(id) >= totalVectors_) {
             throw std::out_of_range("Vector ID out of range.");
         }
 
@@ -464,7 +468,7 @@ public:
         uint16_t slot = idToSlotInPage_[static_cast<size_t>(id)];
 
         if (page < 0) {
-            std::printf("Problematic id: %d\n", id);
+            std::printf("Problematic id: %ld\n", id);
             throw std::runtime_error("Vector slot not assigned for this ID.");
         }
 
@@ -497,12 +501,12 @@ public:
 
     // Prefetch pages corresponding to given vector IDs.
     // This simply ensures the relevant pages are loaded into the page cache.
-    void prefetchByIds(const std::vector<int>& ids) override {
+    void prefetchByIds(const std::vector<node_id_t>& ids) override {
         if (maxCachedPages_ == 0) return;
 
         std::unordered_map<size_t, bool> seenPage;
-        for (int id : ids) {
-            if (id < 0 || static_cast<size_t>(id) >= totalVectors_) continue;
+        for (node_id_t id : ids) {
+            if (static_cast<size_t>(id) >= totalVectors_) continue;
             int64_t page = idToPage_[static_cast<size_t>(id)];
             if (page < 0) continue;
             size_t pageId = static_cast<size_t>(page);
@@ -512,3 +516,4 @@ public:
         }
     }
 };
+}

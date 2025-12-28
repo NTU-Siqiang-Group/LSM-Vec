@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <iostream>
 
-namespace ROCKSDB_NAMESPACE
+namespace lsm_vec
 {
     /**
      * SimHash-based Sampling Module for LSM-VEC

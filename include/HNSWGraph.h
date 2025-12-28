@@ -1,24 +1,29 @@
+#pragma once
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <random>
 #include "rocksdb/graph.h"
 #include "rocksdb/db.h"
+#include "rocksdb/options.h"
+#include "rocksdb/statistics.h"
 #include <iostream>
 #include "DiskVector.h"
 #include "Config.h"
 #include "Statistics.h"
 
-namespace ROCKSDB_NAMESPACE
+namespace lsm_vec
 {
+using namespace ROCKSDB_NAMESPACE;
+
     class HNSWGraph
     {
     public:
         struct Node
         {
-            int id;
+            node_id_t id;
             std::vector<float> point;
-            std::unordered_map<int, std::vector<int>> neighbors; // Layer -> neighbors
+            std::unordered_map<node_id_t, std::vector<node_id_t>> neighbors; // Layer -> neighbors
         };
 
         HNSWStats stats;
@@ -29,11 +34,11 @@ namespace ROCKSDB_NAMESPACE
             useHeuristicNeighborSelection_ = v;
         }
 
-        HNSWGraph(int M, int Mmax, int Ml, float efConstruction, RocksGraph *db, std::ostream &outFile, std::string vectorfilePath, int dim, const Config& cfg);
+        HNSWGraph(int M, int Mmax, int Ml, float efConstruction, std::ostream &outFile, std::string vectorfilePath, int dim, const Config& cfg_);
 
-        void insertNode(int id, const std::vector<float> &point);
-        void insertNodeOld(int id, const std::vector<float> &point);
-        int KNNsearch(const std::vector<float> &queryPoint);
+        void insertNode(node_id_t id, const std::vector<float> &point);
+        void insertNodeOld(node_id_t id, const std::vector<float> &point);
+        node_id_t KNNsearch(const std::vector<float> &queryPoint);
         std::unordered_set<int> highestLayerNodes;
 
         void printIndexStatus() const;
@@ -46,34 +51,34 @@ namespace ROCKSDB_NAMESPACE
     private:
         int randomLevel();
         float euclideanDistance(const std::vector<float> &a, const std::vector<float> &b) const;
-        std::vector<int> searchLayer(const std::vector<float> &queryPoint, int ep, int ef, int layer);
-        void linkNeighbors(int nodeId, const std::vector<int> &neighbors, int layer);
-        void linkNeighborsAsterDB(int nodeId, const std::vector<float> &point, const std::vector<int> &neighbors);
+        std::vector<node_id_t> searchLayer(const std::vector<float> &queryPoint, node_id_t entryPoint, int ef, int layer);
+        void linkNeighbors(node_id_t id, const std::vector<node_id_t> &neighbors, int layer);
+        void linkNeighborsAsterDB(node_id_t id, const std::vector<float> &point, const std::vector<node_id_t> &neighbors);
 
-        std::vector<int> selectNeighbors(
+        std::vector<node_id_t> selectNeighbors(
             const std::vector<float>& point,
-            const std::vector<int>& candidates,
+            const std::vector<node_id_t>& candidates,
             int M,
             int layer
         );
 
-        std::vector<int> selectNeighborsSimple(
+        std::vector<node_id_t> selectNeighborsSimple(
             const std::vector<float>& point,
-            const std::vector<int>& candidates,
+            const std::vector<node_id_t>& candidates,
             int M,
             int layer
         );
 
-        std::vector<int> selectNeighborsHeuristic1(
+        std::vector<node_id_t> selectNeighborsHeuristic1(
             const std::vector<float>& point,
-            const std::vector<int>& candidates,
+            const std::vector<node_id_t>& candidates,
             int M,
             int layer
         );
 
-        std::vector<int> selectNeighborsHeuristic2(
+        std::vector<node_id_t> selectNeighborsHeuristic2(
             const std::vector<float>& point,
-            const std::vector<int>& candidates,
+            const std::vector<node_id_t>& candidates,
             int M,
             int layer
         );
@@ -83,10 +88,9 @@ namespace ROCKSDB_NAMESPACE
         int Ml;               // Nomalization factor for level generation
         float efConstruction; // Parameter for candidate selection
 
-        RocksGraph *db;        // Pointer to RocksGraph (AsterDB)
+        rocksdb::Options options_;
+        std::unique_ptr<rocksdb::RocksGraph> db_;
         std::ostream &outFile; // Output stream for logging
-
-        int entryPoint = -1; // Entry point for HNSW graph
 
         std::unordered_map<int, Node> nodes; // In-memory nodes for layers > 0
 
@@ -94,9 +98,9 @@ namespace ROCKSDB_NAMESPACE
         std::mt19937 gen;
         std::uniform_real_distribution<> dist;
         int maxLayer;
+        node_id_t entryPoint = -1; // Entry point for HNSW graph
 
         // Store length for node
         std::vector<float> node_length;
     };
 } // namespace ROCKSDB_NAMESPACE
-#pragma once
