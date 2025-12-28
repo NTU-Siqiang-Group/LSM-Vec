@@ -14,6 +14,8 @@
 namespace lsm_vec
 {
 using node_id_t = std::uint64_t;
+static constexpr node_id_t k_invalid_node_id =
+    std::numeric_limits<node_id_t>::max();
 
 class IVectorStorage {
 public:

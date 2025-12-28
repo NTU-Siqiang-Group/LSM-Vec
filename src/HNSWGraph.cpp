@@ -72,10 +72,12 @@ namespace lsm_vec
 {
 using namespace ROCKSDB_NAMESPACE;
 
-    HNSWGraph::HNSWGraph(int M, int Mmax, int Ml, float efConstruction, std::ostream &outFile, std::string vectorfilePath, int vectordim, const Config& cfg_)
+    HNSWGraph::HNSWGraph(int M, int Mmax, int Ml, float efConstruction, std::ostream &outFile, int vectordim, const Config& cfg_)
         : M(M), Mmax(Mmax), Ml(Ml), efConstruction(efConstruction), outFile(outFile), gen(rd()), dist(0, 1), maxLayer(-1), entryPoint(-1)
     {
-        gen.seed(12345);
+        if(cfg_.random_seed > 0){
+            gen.seed(cfg_.random_seed);
+        }
 
         options_.create_if_missing = true;
         options_.db_paths.emplace_back(rocksdb::DbPath(cfg_.db_path, cfg_.db_target_size));
@@ -127,137 +129,6 @@ using namespace ROCKSDB_NAMESPACE;
         return std::sqrt(sum);
     }
 
-    // Inserts a node into the HNSW graph
-    void HNSWGraph::insertNodeOld(node_id_t id, const std::vector<float> &point)
-    {
-        vectorStorage->storeVectorToDisk(id, point);         
-
-        int highestLayer = randomLevel();
-        // std::cout << "Node " << id << " assigned to highest layer: " << highestLayer << std::endl;
-
-        if (highestLayer > 0)
-        {
-            Node newNode{id, point};
-            newNode.neighbors = std::unordered_map<node_id_t, std::vector<node_id_t>>();
-            nodes[id] = newNode;
-        }
-
-        if (entryPoint == -1)
-        {
-            entryPoint = id;
-            maxLayer = highestLayer;
-            linkNeighborsAsterDB(id, point, {});
-            // std::cout << "First node inserted. Entry point set to: " << id << std::endl;
-
-            auto end = std::chrono::high_resolution_clock::now();
-            // std::cout << "Inserting node ID: " << id << " with point size: " << point.size() << " took " << std::chrono::duration<double>(end - start).count() << " seconds" << std::endl;
-            return;
-        }
-
-        int currentEntryPoint = entryPoint;
-
-        for (int l = maxLayer; l > highestLayer; --l)
-        {
-            std::vector<node_id_t> closest = searchLayer(point, currentEntryPoint, 1, l);
-            if (!closest.empty())
-            {
-                currentEntryPoint = closest[0];
-            }
-        }
-
-        for (int l = std::min(maxLayer, highestLayer); l >= 0; --l)
-        {
-            std::vector<node_id_t> neighbors = searchLayer(point, currentEntryPoint, efConstruction, l);
-            std::vector<node_id_t> selectedNeighbors;
-            if(l > 0)
-                selectedNeighbors = selectNeighbors(point, neighbors, M, l);
-            else
-                selectedNeighbors = selectNeighbors(point, neighbors, Mmax, l);
-
-            // add bidirectionall connectionts
-            if (l > 0)
-            {
-                linkNeighbors(id, selectedNeighbors, l);
-            }
-            else if (l == 0)
-            {
-                linkNeighborsAsterDB(id, point, selectedNeighbors);
-            }
-
-            // shrink connections if needed
-            if (l > 0)
-            {
-                for (int neighbor : selectedNeighbors)
-                {
-                    // eConn ← neighbourhood(e) at layer l
-                    std::vector<node_id_t> eConn = nodes[neighbor].neighbors[l];
-                    if (eConn.size() > M)
-                    {
-                        std::vector<node_id_t> eNewConn = selectNeighbors(nodes[neighbor].point, eConn, M, l);
-                        // set neighbourhood(e) at layer l to eNewConn
-                        nodes[neighbor].neighbors[l] = eNewConn;
-                    }
-                }
-            }
-            else if (l == 0)
-            {
-                for (int neighbor : selectedNeighbors)
-                {
-                    // eConn ← neighbourhood(e) at layer l
-                    rocksdb::Edges edges;
-                    db_->GetAllEdges(neighbor, &edges);
-
-                    if (edges.num_edges_out > Mmax)
-                    {
-                        //db_->edge_update_policy_ = EDGE_UPDATE_EAGER;
-                        std::vector<node_id_t> eConns;
-                        for (uint32_t i = 0; i < edges.num_edges_out; ++i)
-                        {
-                            eConns.push_back(edges.nxts_out[i].nxt);
-                        }
-                        /*
-                        std::vector<rocksdb::Property> props;
-                        db_->GetVertexProperty(neighbor, props);
-                        */
-                        //std::vector<float> cur_point1 = nodes[neighbor].point;
-                        std::vector<float> cur_point2;
-
-                        vectorStorage->readVectorFromDisk(neighbor, cur_point2);
-
-                        std::vector<node_id_t> eNewConn = selectNeighbors(cur_point2, eConns, Mmax, l);
-                        // std::cout << "eConns size: " << eConns.size() << std::endl;
-                        // std::cout << "eNewConn size: " << eNewConn.size() << std::endl;
-                        // set neighbourhood(e) at layer l to eNewConn
-                        for (auto node : eConns)
-                        {
-                            if (std::find(eNewConn.begin(), eNewConn.end(), node) == eNewConn.end())
-                            {
-                                db_->DeleteEdge(neighbor, node);
-                                db_->DeleteEdge(node, neighbor);
-                            }
-                        }
-                        // rocksdb::Edges edges;
-                        // db_->GetAllEdges(neighbor, &edges);
-                        // std::cout << "edges.num_edges_out: " << edges.num_edges_out << std::endl;
-                    }
-                }
-            }
-            if (!neighbors.empty())
-            {
-                currentEntryPoint = neighbors[0];
-            }
-        }
-
-        if (highestLayer > maxLayer)
-        {
-            entryPoint = id;
-            maxLayer = highestLayer;
-            std::cout << "Updated entry point to node " << id << " at layer " << highestLayer << std::endl;
-        }
-
-        // std::cout << "Inserting node ID: " << id << " with point size: " << point.size() << " took " << std::chrono::duration<double>(end - start).count() << " seconds" << std::endl;
-    }
-
     void HNSWGraph::insertNode(node_id_t id, const std::vector<float> &point)
     {
         bool vectorStored = false;  // NEW: track whether we've stored this vector
@@ -266,18 +137,18 @@ using namespace ROCKSDB_NAMESPACE;
 
         if (highestLayer > 0)
         {
-            Node newNode{id, point};
-            newNode.neighbors = std::unordered_map<node_id_t, std::vector<node_id_t>>();
+            Node newNode{id, point, {}};
+            newNode.neighbors = std::unordered_map<int, std::vector<node_id_t>>();
             nodes[id] = newNode;
         }
 
         // ----- First node special case -----
-        if (entryPoint == -1)
+        if (entryPoint == k_invalid_node_id)
         {
             entryPoint = id;
             maxLayer   = highestLayer;
 
-            linkNeighborsAsterDB(id, point, {});
+            linkNeighborsAsterDB(id, {});
 
             // For the first node, we can just use id as sectionKey
             node_id_t sectionKey = id;
@@ -308,8 +179,14 @@ using namespace ROCKSDB_NAMESPACE;
         {
             std::vector<node_id_t> neighbors =
                 searchLayer(point, currentEntryPoint, efConstruction, l);
-            std::vector<node_id_t> selectedNeighbors =
+            std::vector<node_id_t> selectedNeighbors = 
                 selectNeighbors(point, neighbors, M, l);
+                
+            // std::vector<node_id_t> selectedNeighbors;
+            // if (l > 0)
+            //     selectedNeighbors = selectNeighbors(point, neighbors, M, l);
+            // else
+            //     selectedNeighbors = selectNeighbors(point, neighbors, Mmax, l);
 
             // If we are at level 1, refine sectionKey using closest neighbor at l=1.
             if (l == 1)
@@ -334,7 +211,7 @@ using namespace ROCKSDB_NAMESPACE;
             }
             else // l == 0
             {
-                linkNeighborsAsterDB(id, point, selectedNeighbors);
+                linkNeighborsAsterDB(id, selectedNeighbors);
             }
 
             // ---- Shrink connections ----
@@ -417,7 +294,7 @@ using namespace ROCKSDB_NAMESPACE;
         }
     }
 
-    void HNSWGraph::linkNeighborsAsterDB(node_id_t id, const std::vector<float> &point, const std::vector<node_id_t> &neighbors)
+    void HNSWGraph::linkNeighborsAsterDB(node_id_t id, const std::vector<node_id_t> &neighbors)
     {
         db_->AddVertex(id);
 
@@ -675,162 +552,285 @@ using namespace ROCKSDB_NAMESPACE;
         return selected;
     }
 
-    std::vector<node_id_t> HNSWGraph::searchLayer(const std::vector<float> &queryPoint, node_id_t entryPoint, int ef, int layer)
+    std::vector<node_id_t> HNSWGraph::searchLayer(const std::vector<float>& queryPoint,
+                                             node_id_t entryPoint,
+                                             int ef,
+                                             int layer)
     {
-        // set of visited elements
+        if (layer < 0) {
+            std::cerr << "Error: Invalid layer for search.\n";
+            return {};
+        }
+        if (ef <= 0) {
+            return {};
+        }
+
+        // Visited set
         std::unordered_set<node_id_t> visited;
+        visited.reserve(static_cast<std::size_t>(ef) * 4);
 
-        // set of candidates
-        std::priority_queue<std::pair<float, node_id_t>> candidates; // C: set of candidates
+        // Candidates: max-heap by (-distance) => smallest distance comes first
+        using Cand = std::pair<float, node_id_t>;
+        std::priority_queue<Cand> candidates;
 
-        // dynamic list of found nearest neighbors
-        std::priority_queue<std::pair<float, node_id_t>> nearestNeighbors; // W: dynamic list of found nearest neighbors
+        // W: max-heap by (distance) => farthest among current best is on top
+        std::priority_queue<Cand> nearest;
 
-        if (layer > 0)
-        {
-            // initialize the search
-            float distToEP = euclideanDistance(queryPoint, nodes[entryPoint].point);
-            visited.insert(entryPoint); // v ← ep
-            candidates.emplace(-distToEP, entryPoint);
-            nearestNeighbors.emplace(distToEP, entryPoint);
+        auto get_distance = [&](node_id_t id) -> float {
+            if (layer > 0) {
+                // Upper layers: vectors are in-memory
+                return euclideanDistance(queryPoint, nodes.at(id).point);
+            } else {
+                // Level 0: vectors are on disk
+                std::vector<float> v;
+                vectorStorage->readVectorFromDisk(id, v);
+                return euclideanDistance(queryPoint, v);
+            }
+        };
 
-            while (!candidates.empty())
-            {
-                // get the nearest candidate, extract nearest element from C
-                node_id_t current = candidates.top().second;
-                float currentDist = -candidates.top().first;
-                candidates.pop();
+        // Initialize with entry point
+        float dist_ep = get_distance(entryPoint);
+        visited.insert(entryPoint);
+        candidates.emplace(-dist_ep, entryPoint);
+        nearest.emplace(dist_ep, entryPoint);
 
-                // check if the current candidate is closer than the farthest neighbor
-                // get furthest element from W to q
-                if (currentDist > nearestNeighbors.top().first)
-                {
-                    break;
+        while (!candidates.empty()) {
+            node_id_t current = candidates.top().second;
+            float cur_dist = -candidates.top().first;
+            candidates.pop();
+
+            // Early termination: if closest candidate is worse than the worst in W, stop
+            if (!nearest.empty() && cur_dist > nearest.top().first) {
+                break;
+            }
+
+            if (layer > 0) {
+                // Upper layers: adjacency is in memory.
+                const auto node_it = nodes.find(current);
+                if (node_it == nodes.end()) {
+                    continue; // Defensive: should not happen
                 }
-                for (node_id_t neighbor : nodes[current].neighbors[layer])
-                {
-                    if (visited.find(neighbor) == visited.end())
-                    {
-                        visited.insert(neighbor);
-                        float dist = euclideanDistance(queryPoint, nodes[neighbor].point);
-                        if (nearestNeighbors.size() < ef || dist < nearestNeighbors.top().first)
-                        {
-                            candidates.emplace(-dist, neighbor);
-                            nearestNeighbors.emplace(dist, neighbor);
-                            if (nearestNeighbors.size() > ef)
-                            {
-                                nearestNeighbors.pop();
+
+                const auto& nbr_map = node_it->second.neighbors;
+                auto it = nbr_map.find(layer);
+                if (it == nbr_map.end()) {
+                    continue; // No adjacency list at this layer (do not create it)
+                }
+
+                const auto& nbrs = it->second;
+                for (node_id_t nb : nbrs) {
+                    if (visited.insert(nb).second) {
+                        float d = euclideanDistance(queryPoint, nodes.at(nb).point);
+                        if (static_cast<int>(nearest.size()) < ef || d < nearest.top().first) {
+                            candidates.emplace(-d, nb);
+                            nearest.emplace(d, nb);
+                            if (static_cast<int>(nearest.size()) > ef) {
+                                nearest.pop();
                             }
                         }
                     }
                 }
-            }
-            std::vector<std::pair<float, node_id_t>> temp;
-
-            
-            while (!nearestNeighbors.empty())
-            {
-                temp.push_back(nearestNeighbors.top());
-                nearestNeighbors.pop();
-            }
-
-            std::sort(temp.begin(), temp.end(), [](const std::pair<float, node_id_t> &a, const std::pair<float, node_id_t> &b)
-                      {
-                          return a.first < b.first;
-                      });
-
-            std::vector<node_id_t> result;
-            for (const auto &pair : temp)
-            {
-                result.push_back(pair.second);
-            }
-            return result;
-        }
-        else if (layer == 0)
-        {
-            // initialize the search
-            // float distToEP = euclideanDistance(queryPoint, nodes[entryPoint].point);
-            std::vector<float> entryPointVector;
-
-            vectorStorage->readVectorFromDisk(entryPoint, entryPointVector);
-
-            float distToEP = euclideanDistance(queryPoint, entryPointVector);
-            visited.insert(entryPoint); // v ← ep
-            candidates.emplace(-distToEP, entryPoint);
-            nearestNeighbors.emplace(distToEP, entryPoint);
-
-            while (!candidates.empty())
-            {
-                // extract nearest element from C to q
-                // get furthest element from W to q
-                node_id_t current = candidates.top().second;
-                float currentDist = -candidates.top().first;
-                candidates.pop();
-
-                // check if the current candidate is closer than the farthest neighbor
-                // get furthest element from W to q
-                if (currentDist > nearestNeighbors.top().first)
-                {
-                    break;
-                }
-
+            } else {
+                // Level 0: adjacency is stored in RocksGraph.
                 rocksdb::Edges edges;
                 db_->GetAllEdges(current, &edges);
 
-                std::vector<int> neighbors;
-                for (uint32_t i = 0; i < edges.num_edges_out; ++i)
-                {
-                    neighbors.push_back(edges.nxts_out[i].nxt);
-                }
+                for (uint32_t i = 0; i < edges.num_edges_out; ++i) {
+                    node_id_t nb = static_cast<node_id_t>(edges.nxts_out[i].nxt);
 
-                for (node_id_t neighbor : neighbors)
-                {
-                    if (visited.find(neighbor) == visited.end())
-                    {
-                        visited.insert(neighbor);
-                        // float dist = euclideanDistance(queryPoint, nodes[neighbor].point);
-                        std::vector<float> neighborVector;
-                        vectorStorage->readVectorFromDisk(neighbor, neighborVector);
+                    if (visited.insert(nb).second) {
+                        std::vector<float> nb_vec;
+                        vectorStorage->readVectorFromDisk(nb, nb_vec);
 
-                        float dist = euclideanDistance(queryPoint, neighborVector);
-                        if (nearestNeighbors.size() < ef || dist < nearestNeighbors.top().first)
-                        {
-                            candidates.emplace(-dist, neighbor);
-                            nearestNeighbors.emplace(dist, neighbor);
-                            if (nearestNeighbors.size() > ef)
-                            {
-                                nearestNeighbors.pop(); // remove furthest element from W to q
+                        float d = euclideanDistance(queryPoint, nb_vec);
+                        if (static_cast<int>(nearest.size()) < ef || d < nearest.top().first) {
+                            candidates.emplace(-d, nb);
+                            nearest.emplace(d, nb);
+                            if (static_cast<int>(nearest.size()) > ef) {
+                                nearest.pop();
                             }
                         }
                     }
                 }
             }
-            std::vector<std::pair<float, node_id_t>> temp;
-
-            while (!nearestNeighbors.empty())
-            {
-                temp.push_back(nearestNeighbors.top());
-                nearestNeighbors.pop();
-            }
-
-            std::sort(temp.begin(), temp.end(), [](const std::pair<float, node_id_t> &a, const std::pair<float, node_id_t> &b)
-                      {
-                          return a.first < b.first; // 比较距离
-                      });
-
-            std::vector<node_id_t> result;
-            for (const auto &pair : temp)
-            {
-                result.push_back(pair.second);
-            }
-            return result;
         }
-        else
-        {
-            // error
-            std::cerr << "Error: Invalid layer for search." << std::endl;
+
+        // Extract results from nearest (sorted ascending by distance)
+        std::vector<std::pair<float, node_id_t>> temp;
+        temp.reserve(nearest.size());
+        while (!nearest.empty()) {
+            temp.push_back(nearest.top());
+            nearest.pop();
         }
+
+        std::sort(temp.begin(), temp.end(),
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+
+        std::vector<node_id_t> result;
+        result.reserve(temp.size());
+        for (const auto& p : temp) {
+            result.push_back(p.second);
+        }
+        return result;
     }
+
+
+    // std::vector<node_id_t> HNSWGraph::searchLayer(const std::vector<float> &queryPoint, node_id_t entryPoint, int ef, int layer)
+    // {
+    //     // set of visited elements
+    //     std::unordered_set<node_id_t> visited;
+
+    //     // set of candidates
+    //     std::priority_queue<std::pair<float, node_id_t>> candidates; // C: set of candidates
+
+    //     // dynamic list of found nearest neighbors
+    //     std::priority_queue<std::pair<float, node_id_t>> nearestNeighbors; // W: dynamic list of found nearest neighbors
+
+    //     if (layer > 0)
+    //     {
+    //         // initialize the search
+    //         float distToEP = euclideanDistance(queryPoint, nodes[entryPoint].point);
+    //         visited.insert(entryPoint); // v ← ep
+    //         candidates.emplace(-distToEP, entryPoint);
+    //         nearestNeighbors.emplace(distToEP, entryPoint);
+
+    //         while (!candidates.empty())
+    //         {
+    //             // get the nearest candidate, extract nearest element from C
+    //             node_id_t current = candidates.top().second;
+    //             float currentDist = -candidates.top().first;
+    //             candidates.pop();
+
+    //             // check if the current candidate is closer than the farthest neighbor
+    //             // get furthest element from W to q
+    //             if (currentDist > nearestNeighbors.top().first)
+    //             {
+    //                 break;
+    //             }
+    //             for (node_id_t neighbor : nodes[current].neighbors[layer])
+    //             {
+    //                 if (visited.find(neighbor) == visited.end())
+    //                 {
+    //                     visited.insert(neighbor);
+    //                     float dist = euclideanDistance(queryPoint, nodes[neighbor].point);
+    //                     if (nearestNeighbors.size() < ef || dist < nearestNeighbors.top().first)
+    //                     {
+    //                         candidates.emplace(-dist, neighbor);
+    //                         nearestNeighbors.emplace(dist, neighbor);
+    //                         if (nearestNeighbors.size() > ef)
+    //                         {
+    //                             nearestNeighbors.pop();
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //         std::vector<std::pair<float, node_id_t>> temp;
+
+            
+    //         while (!nearestNeighbors.empty())
+    //         {
+    //             temp.push_back(nearestNeighbors.top());
+    //             nearestNeighbors.pop();
+    //         }
+
+    //         std::sort(temp.begin(), temp.end(), [](const std::pair<float, node_id_t> &a, const std::pair<float, node_id_t> &b)
+    //                   {
+    //                       return a.first < b.first;
+    //                   });
+
+    //         std::vector<node_id_t> result;
+    //         for (const auto &pair : temp)
+    //         {
+    //             result.push_back(pair.second);
+    //         }
+    //         return result;
+    //     }
+    //     else if (layer == 0)
+    //     {
+    //         // initialize the search
+    //         // float distToEP = euclideanDistance(queryPoint, nodes[entryPoint].point);
+    //         std::vector<float> entryPointVector;
+
+    //         vectorStorage->readVectorFromDisk(entryPoint, entryPointVector);
+
+    //         float distToEP = euclideanDistance(queryPoint, entryPointVector);
+    //         visited.insert(entryPoint); // v ← ep
+    //         candidates.emplace(-distToEP, entryPoint);
+    //         nearestNeighbors.emplace(distToEP, entryPoint);
+
+    //         while (!candidates.empty())
+    //         {
+    //             // extract nearest element from C to q
+    //             // get furthest element from W to q
+    //             node_id_t current = candidates.top().second;
+    //             float currentDist = -candidates.top().first;
+    //             candidates.pop();
+
+    //             // check if the current candidate is closer than the farthest neighbor
+    //             // get furthest element from W to q
+    //             if (currentDist > nearestNeighbors.top().first)
+    //             {
+    //                 break;
+    //             }
+
+    //             rocksdb::Edges edges;
+    //             db_->GetAllEdges(current, &edges);
+
+    //             std::vector<int> neighbors;
+    //             for (uint32_t i = 0; i < edges.num_edges_out; ++i)
+    //             {
+    //                 neighbors.push_back(edges.nxts_out[i].nxt);
+    //             }
+
+    //             for (node_id_t neighbor : neighbors)
+    //             {
+    //                 if (visited.find(neighbor) == visited.end())
+    //                 {
+    //                     visited.insert(neighbor);
+    //                     // float dist = euclideanDistance(queryPoint, nodes[neighbor].point);
+    //                     std::vector<float> neighborVector;
+    //                     vectorStorage->readVectorFromDisk(neighbor, neighborVector);
+
+    //                     float dist = euclideanDistance(queryPoint, neighborVector);
+    //                     if (nearestNeighbors.size() < ef || dist < nearestNeighbors.top().first)
+    //                     {
+    //                         candidates.emplace(-dist, neighbor);
+    //                         nearestNeighbors.emplace(dist, neighbor);
+    //                         if (nearestNeighbors.size() > ef)
+    //                         {
+    //                             nearestNeighbors.pop(); // remove furthest element from W to q
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //         std::vector<std::pair<float, node_id_t>> temp;
+
+    //         while (!nearestNeighbors.empty())
+    //         {
+    //             temp.push_back(nearestNeighbors.top());
+    //             nearestNeighbors.pop();
+    //         }
+
+    //         std::sort(temp.begin(), temp.end(), [](const std::pair<float, node_id_t> &a, const std::pair<float, node_id_t> &b)
+    //                   {
+    //                       return a.first < b.first; // 比较距离
+    //                   });
+
+    //         std::vector<node_id_t> result;
+    //         for (const auto &pair : temp)
+    //         {
+    //             result.push_back(pair.second);
+    //         }
+    //         return result;
+    //     }
+    //     else
+    //     {
+    //         // error
+    //         std::cerr << "Error: Invalid layer for search." << std::endl;
+    //     }
+    // }
 
     // Performs a greedy search to find the closest neighbor at a specific layer
     node_id_t HNSWGraph::KNNsearch(const std::vector<float> &queryPoint)
@@ -850,6 +850,58 @@ using namespace ROCKSDB_NAMESPACE;
         nearestNeighbors = searchLayer(queryPoint, currentEntryPoint, 30, 0);
 
         return nearestNeighbors[0];
+    }
+
+    void HNSWGraph::printState() const
+    {
+        // We do not print layer 0 by request.
+        if (maxLayer <= 0) {
+            std::cout << "HNSW state: max_layer=" << maxLayer
+                    << " (no upper layers to report)\n";
+            return;
+        }
+
+        // Count how many nodes have adjacency info at each upper layer.
+        // Note: this counts "nodes that currently have neighbor entries at layer l",
+        // which is derivable from existing in-memory structures without extra metadata.
+        std::vector<std::size_t> layer_node_counts(static_cast<std::size_t>(maxLayer + 1), 0);
+
+        // To avoid double counting, we track per-layer seen node IDs.
+        std::vector<std::unordered_set<node_id_t>> seen(static_cast<std::size_t>(maxLayer + 1));
+
+        for (const auto& kv : nodes) {
+            node_id_t nid = kv.first;
+            const Node& node = kv.second;
+
+            for (const auto& kv2 : node.neighbors) {
+                // The key type should be "layer index".
+                // If your neighbors map key is int, this is already int.
+                // If it's not int, cast safely.
+                int layer = static_cast<int>(kv2.first);
+
+                if (layer <= 0) continue;          // skip layer 0 (and any invalid)
+                if (layer > maxLayer) continue;    // defensive
+
+                // Option A (default): count node if it has the layer key at all.
+                // Option B: count only if the adjacency list is non-empty:
+                // if (kv2.second.empty()) continue;
+
+                if (seen[static_cast<std::size_t>(layer)].insert(nid).second) {
+                    layer_node_counts[static_cast<std::size_t>(layer)]++;
+                }
+            }
+        }
+
+        std::cout << "HNSW state:\n";
+        std::cout << "  max_layer: " << maxLayer << "\n";
+        std::cout << "  upper_layers: [1.." << maxLayer << "]\n";
+
+        // Print top-down for readability
+        for (int l = maxLayer; l >= 1; --l) {
+            std::cout << "  layer " << l << ": "
+                    << layer_node_counts[static_cast<std::size_t>(l)]
+                    << " nodes\n";
+        }
     }
 
     // void HNSWGraph::printStatistics() const

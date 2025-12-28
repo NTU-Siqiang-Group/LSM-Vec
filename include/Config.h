@@ -16,6 +16,7 @@ struct Config {
     int   Ml = 1;
     float efConstruction = 64.0f;
     size_t input_size;
+    int random_seed = 12345;
 
     int vector_storage_type = 0; // 0 for basic, 1 for paged
 
