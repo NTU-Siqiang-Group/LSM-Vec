@@ -28,79 +28,79 @@ using namespace ROCKSDB_NAMESPACE;
 
         HNSWStats stats;
 
-        bool useHeuristicNeighborSelection_ = true;
+        bool use_heuristic_neighbor_selection_ = true;
 
-        void setNeighborSelection(bool v) {
-            useHeuristicNeighborSelection_ = v;
+        void setNeighborSelection(bool useHeuristic) {
+            use_heuristic_neighbor_selection_ = useHeuristic;
         }
 
-        HNSWGraph(int M, int Mmax, int Ml, float efConstruction, std::ostream &outFile, int dim, const Config& cfg_);
+        HNSWGraph(int m, int mMax, int mLevel, float efConstruction, std::ostream &outFile, int vectorDim, const Config& config);
 
-        void insertNode(node_id_t id, const std::vector<float> &point);
-        node_id_t KNNsearch(const std::vector<float> &queryPoint);
-        std::unordered_set<int> highestLayerNodes;
+        void insertNode(node_id_t nodeId, const std::vector<float> &vector);
+        node_id_t knnSearch(const std::vector<float> &queryVector);
+        std::unordered_set<int> highest_layer_nodes_;
 
         void printIndexStatus() const;
         void printStatistics() const;
         void printState() const;
 
-        std::string vectorfilePath;
-        int vectordim = 0;
-        std::unique_ptr<IVectorStorage> vectorStorage;
+        std::string vector_file_path_;
+        int vector_dim_ = 0;
+        std::unique_ptr<IVectorStorage> vector_storage_;
 
     private:
         int randomLevel();
-        float euclideanDistance(const std::vector<float> &a, const std::vector<float> &b) const;
-        std::vector<node_id_t> searchLayer(const std::vector<float> &queryPoint, node_id_t entryPoint, int ef, int layer);
-        void linkNeighbors(node_id_t id, const std::vector<node_id_t> &neighbors, int layer);
-        void linkNeighborsAsterDB(node_id_t id, const std::vector<node_id_t> &neighbors);
+        float euclideanDistance(const std::vector<float> &vectorA, const std::vector<float> &vectorB) const;
+        std::vector<node_id_t> searchLayer(const std::vector<float> &queryVector, node_id_t entryPointId, int efSearch, int layer);
+        void linkNeighbors(node_id_t nodeId, const std::vector<node_id_t> &neighborIds, int layer);
+        void linkNeighborsAsterDB(node_id_t nodeId, const std::vector<node_id_t> &neighborIds);
 
         std::vector<node_id_t> selectNeighbors(
-            const std::vector<float>& point,
-            const std::vector<node_id_t>& candidates,
-            int M,
+            const std::vector<float>& vector,
+            const std::vector<node_id_t>& candidateIds,
+            int maxNeighbors,
             int layer
         );
 
         std::vector<node_id_t> selectNeighborsSimple(
-            const std::vector<float>& point,
-            const std::vector<node_id_t>& candidates,
-            int M,
+            const std::vector<float>& vector,
+            const std::vector<node_id_t>& candidateIds,
+            int maxNeighbors,
             int layer
         );
 
         std::vector<node_id_t> selectNeighborsHeuristic1(
-            const std::vector<float>& point,
-            const std::vector<node_id_t>& candidates,
-            int M,
+            const std::vector<float>& vector,
+            const std::vector<node_id_t>& candidateIds,
+            int maxNeighbors,
             int layer
         );
 
         std::vector<node_id_t> selectNeighborsHeuristic2(
-            const std::vector<float>& point,
-            const std::vector<node_id_t>& candidates,
-            int M,
+            const std::vector<float>& vector,
+            const std::vector<node_id_t>& candidateIds,
+            int maxNeighbors,
             int layer
         );
 
-        int M;                // number of established connections
-        int Mmax;             // Maximum neighbors per layer
-        int Ml;               // Nomalization factor for level generation
-        float efConstruction; // Parameter for candidate selection
+        int m_;                      // Number of established connections
+        int m_max_;                  // Maximum neighbors per layer
+        int m_level_;                // Normalization factor for level generation
+        float ef_construction_;      // Parameter for candidate selection
 
         rocksdb::Options options_;
         std::unique_ptr<rocksdb::RocksGraph> db_;
-        std::ostream &outFile; // Output stream for logging
+        std::ostream &out_file_;     // Output stream for logging
 
-        std::unordered_map<int, Node> nodes; // In-memory nodes for layers > 0
+        std::unordered_map<int, Node> nodes_; // In-memory nodes for layers > 0
 
-        std::random_device rd;
-        std::mt19937 gen;
-        std::uniform_real_distribution<> dist;
-        int maxLayer;
-        node_id_t entryPoint = k_invalid_node_id; // Entry point for HNSW graph
+        std::random_device random_device_;
+        std::mt19937 random_generator_;
+        std::uniform_real_distribution<> uniform_distribution_;
+        int max_layer_;
+        node_id_t entry_point_ = k_invalid_node_id; // Entry point for HNSW graph
 
         // Store length for node
-        std::vector<float> node_length;
+        std::vector<float> node_lengths_;
     };
 } // namespace ROCKSDB_NAMESPACE

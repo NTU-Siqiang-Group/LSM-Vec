@@ -11,6 +11,11 @@ set(CMAKE_BUILD_TYPE Release)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -Wall -Wextra -O2")
 
+find_package(Boost REQUIRED)
+include_directories(PRIVATE ${Boost_INCLUDE_DIRS})
+find_library(JEMALLOC_LIB jemalloc HINTS "$(brew --prefix jemalloc)/lib")
+include_directories(PRIVATE ${JEMALLOC_LIB})
+
 set(ASTER_ROCKSDB_ROOT ${CMAKE_SOURCE_DIR}/lib/aster)
 
 find_library(ROCKSDB_LIB rocksdb
@@ -79,6 +84,7 @@ target_link_libraries(lsm_vec PRIVATE
     z
     pthread
     dl
+    jemalloc
 )
 
 # Set output directory for the executable

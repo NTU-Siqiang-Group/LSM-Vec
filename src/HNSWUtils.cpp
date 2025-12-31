@@ -94,7 +94,7 @@ void queryBigANN(lsm_vec::HNSWGraph &graph, const std::string &queryFile, const 
 
     for (size_t i = 0; i < queries.size(); ++i)
     {
-        int hnswResult = graph.KNNsearch(queries[i]);
+        int hnswResult = graph.knnSearch(queries[i]);
         int groundTruthResult = groundTruth[i][0]; // Assuming the first entry is the closest
 
         if (hnswResult == groundTruthResult)
@@ -190,8 +190,8 @@ void insertFromFile(lsm_vec::HNSWGraph &graph, const std::string &filename)
     {
         if (node_count == 0)
         {
-            graph.vectordim = dim;
-            std::cout << "vector dim: " << graph.vectordim << std::endl;
+            graph.vector_dim_ = dim;
+            std::cout << "vector dim: " << graph.vector_dim_ << std::endl;
         }
 
         std::vector<float> floatVec;
@@ -254,7 +254,7 @@ void queryAndCompareWithGroundTruth(lsm_vec::HNSWGraph &graph, const std::string
         auto start = std::chrono::high_resolution_clock::now();
 
         // Perform the HNSW query
-        int hnswResult = graph.KNNsearch(queries[i]);
+        int hnswResult = graph.knnSearch(queries[i]);
 
         // Stop measuring query time
         auto end = std::chrono::high_resolution_clock::now();
