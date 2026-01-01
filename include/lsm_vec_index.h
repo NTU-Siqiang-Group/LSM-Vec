@@ -8,15 +8,16 @@
 #include "rocksdb/options.h"
 #include "rocksdb/statistics.h"
 #include <iostream>
-#include "DiskVector.h"
-#include "Config.h"
-#include "Statistics.h"
+#include "disk_vector.h"
+#include "config.h"
+#include "statistics.h"
+#include "logger.h"
 
 namespace lsm_vec
 {
 using namespace ROCKSDB_NAMESPACE;
 
-    class HNSWGraph
+    class LSMVec
     {
     public:
         struct Node
@@ -34,7 +35,7 @@ using namespace ROCKSDB_NAMESPACE;
             use_heuristic_neighbor_selection_ = useHeuristic;
         }
 
-        HNSWGraph(int m, int mMax, int mLevel, float efConstruction, std::ostream &outFile, int vectorDim, const Config& config);
+        LSMVec(int m, int mMax, int mLevel, float efConstruction, std::ostream &outFile, int vectorDim, const Config& config);
 
         void insertNode(node_id_t nodeId, const std::vector<float> &vector);
         node_id_t knnSearch(const std::vector<float> &queryVector);

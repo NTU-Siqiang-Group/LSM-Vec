@@ -2,9 +2,9 @@
 #include <fstream>
 #include <vector>
 #include <string>
-#include "HNSWUtils.h"
-#include "HNSWGraph.h"
-#include "Config.h"
+#include "utils.h"
+#include "lsm_vec_index.h"
+#include "config.h"
 
 
 
@@ -21,7 +21,7 @@ int main(int argc, char* argv[])
     int vectorDim = getdim(config.input_file_path);
     std::cout << "Vector dimension: " << vectorDim << "\n";
 
-    lsm_vec::HNSWGraph hnsw(
+    lsm_vec::LSMVec hnsw(
         config.M, config.Mmax, config.Ml, config.efConstruction, outFile, vectorDim, config
     );
 

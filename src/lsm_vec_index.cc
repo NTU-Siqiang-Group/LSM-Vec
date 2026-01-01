@@ -1,5 +1,5 @@
-#include "HNSWGraph.h"
-#include "DiskVector.h"
+#include "lsm_vec_index.h"
+#include "disk_vector.h"
 #include <cmath>
 #include <limits>
 #include <queue>
@@ -72,12 +72,14 @@ namespace lsm_vec
 {
 using namespace ROCKSDB_NAMESPACE;
 
-    HNSWGraph::HNSWGraph(int m, int mMax, int mLevel, float efConstruction, std::ostream &outFile, int vectorDim, const Config& config)
+    LSMVec::LSMVec(int m, int mMax, int mLevel, float efConstruction, std::ostream &outFile, int vectorDim, const Config& config)
         : m_(m), m_max_(mMax), m_level_(mLevel), ef_construction_(efConstruction), out_file_(outFile), random_generator_(random_device_()), uniform_distribution_(0, 1), max_layer_(-1), entry_point_(-1)
     {
         if(config.random_seed > 0){
             random_generator_.seed(config.random_seed);
         }
+        
+        initializeLogger(LogChoice::STDOUT, nullptr, LogSeverity::INFO);
 
         options_.create_if_missing = true;
         options_.db_paths.emplace_back(rocksdb::DbPath(config.db_path, config.db_target_size));
@@ -108,7 +110,7 @@ using namespace ROCKSDB_NAMESPACE;
         }
     }
     // Generates a random level for the node
-    int HNSWGraph::randomLevel()
+    int LSMVec::randomLevel()
     {
         std::uniform_real_distribution<float> distribution(0.0, 1.0);
         double r = -log(distribution(random_generator_)) / log(1.0 * m_);
@@ -118,7 +120,7 @@ using namespace ROCKSDB_NAMESPACE;
     }
 
     // Calculates the Euclidean distance between two points
-    float HNSWGraph::euclideanDistance(const std::vector<float> &vectorA, const std::vector<float> &vectorB) const
+    float LSMVec::euclideanDistance(const std::vector<float> &vectorA, const std::vector<float> &vectorB) const
     {
         float sum = 0.0;
         for (size_t i = 0; i < vectorA.size(); ++i)
@@ -128,7 +130,7 @@ using namespace ROCKSDB_NAMESPACE;
         return std::sqrt(sum);
     }
 
-    void HNSWGraph::insertNode(node_id_t nodeId, const std::vector<float> &vector)
+    void LSMVec::insertNode(node_id_t nodeId, const std::vector<float> &vector)
     {
         bool vectorStored = false;  // Track whether we've stored this vector
 
@@ -284,7 +286,7 @@ using namespace ROCKSDB_NAMESPACE;
     }
 
     // Links neighbors for upper layers stored in memory
-    void HNSWGraph::linkNeighbors(node_id_t nodeId, const std::vector<node_id_t> &neighborIds, int layer)
+    void LSMVec::linkNeighbors(node_id_t nodeId, const std::vector<node_id_t> &neighborIds, int layer)
     {
         for (node_id_t neighborId : neighborIds)
         {
@@ -293,7 +295,7 @@ using namespace ROCKSDB_NAMESPACE;
         }
     }
 
-    void HNSWGraph::linkNeighborsAsterDB(node_id_t nodeId, const std::vector<node_id_t> &neighborIds)
+    void LSMVec::linkNeighborsAsterDB(node_id_t nodeId, const std::vector<node_id_t> &neighborIds)
     {
         db_->AddVertex(nodeId);
 
@@ -304,7 +306,7 @@ using namespace ROCKSDB_NAMESPACE;
         }
     }
 
-    std::vector<node_id_t> HNSWGraph::selectNeighbors(
+    std::vector<node_id_t> LSMVec::selectNeighbors(
         const std::vector<float> &vector,
         const std::vector<node_id_t> &candidateIds,
         int maxNeighbors,
@@ -318,7 +320,7 @@ using namespace ROCKSDB_NAMESPACE;
     }
 
     // Selects neighbors based on distance and pruning logic
-    std::vector<node_id_t> HNSWGraph::selectNeighborsSimple(const std::vector<float> &vector, const std::vector<node_id_t> &candidateIds, int maxNeighbors, int layer)
+    std::vector<node_id_t> LSMVec::selectNeighborsSimple(const std::vector<float> &vector, const std::vector<node_id_t> &candidateIds, int maxNeighbors, int layer)
     {
         if (candidateIds.size() <= static_cast<size_t>(maxNeighbors))
         {
@@ -358,7 +360,7 @@ using namespace ROCKSDB_NAMESPACE;
         }
     }
 
-    std::vector<node_id_t> HNSWGraph::selectNeighborsHeuristic1(
+    std::vector<node_id_t> LSMVec::selectNeighborsHeuristic1(
         const std::vector<float> &vector,
         const std::vector<node_id_t> &candidateIds,
         int maxNeighbors,
@@ -459,7 +461,7 @@ using namespace ROCKSDB_NAMESPACE;
         return selected;
     }
 
-    std::vector<node_id_t> HNSWGraph::selectNeighborsHeuristic2(
+    std::vector<node_id_t> LSMVec::selectNeighborsHeuristic2(
         const std::vector<float> &vector,
         const std::vector<node_id_t> &candidateIds,
         int maxNeighbors,
@@ -550,7 +552,7 @@ using namespace ROCKSDB_NAMESPACE;
         return selected;
     }
 
-    std::vector<node_id_t> HNSWGraph::searchLayer(const std::vector<float>& queryVector,
+    std::vector<node_id_t> LSMVec::searchLayer(const std::vector<float>& queryVector,
                                              node_id_t entryPointId,
                                              int efSearch,
                                              int layer)
@@ -673,7 +675,7 @@ using namespace ROCKSDB_NAMESPACE;
     }
 
 
-    // std::vector<node_id_t> HNSWGraph::searchLayer(const std::vector<float> &queryPoint, node_id_t entryPoint, int ef, int layer)
+    // std::vector<node_id_t> LSMVec::searchLayer(const std::vector<float> &queryPoint, node_id_t entryPoint, int ef, int layer)
     // {
     //     // set of visited elements
     //     std::unordered_set<node_id_t> visited;
@@ -831,7 +833,7 @@ using namespace ROCKSDB_NAMESPACE;
     // }
 
     // Performs a greedy search to find the closest neighbor at a specific layer
-    node_id_t HNSWGraph::knnSearch(const std::vector<float> &queryVector)
+    node_id_t LSMVec::knnSearch(const std::vector<float> &queryVector)
     {
         // W ← ∅ set for the current nearest elements
         std::vector<node_id_t> nearestNeighbors; // W: dynamic list of found nearest neighbors
@@ -850,7 +852,7 @@ using namespace ROCKSDB_NAMESPACE;
         return nearestNeighbors[0];
     }
 
-    void HNSWGraph::printState() const
+    void LSMVec::printState() const
     {
         // We do not print layer 0 by request.
         if (max_layer_ <= 0) {
@@ -902,7 +904,7 @@ using namespace ROCKSDB_NAMESPACE;
         }
     }
 
-    // void HNSWGraph::printStatistics() const
+    // void LSMVec::printStatistics() const
     // {
     //     std::cout << "Indexing Time: " << indexingTime << " seconds" << std::endl;
 

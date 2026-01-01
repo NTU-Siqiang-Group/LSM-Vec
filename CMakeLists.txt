@@ -55,9 +55,9 @@ include_directories(${ROCKSDB_INCLUDE_DIR})
 
 # Specify the source files
 set(SOURCES
-    src/HNSWGraph.cpp
-    src/HNSWUtils.cpp
-    src/main.cpp
+    src/lsm_vec_index.cc
+    src/utils.cc
+    src/test.cc
 )
 
 # Add the executable target
