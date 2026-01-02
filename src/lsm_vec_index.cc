@@ -72,17 +72,33 @@ namespace lsm_vec
 {
 using namespace ROCKSDB_NAMESPACE;
 
-    LSMVec::LSMVec(int m, int mMax, int mLevel, float efConstruction, std::ostream &outFile, int vectorDim, const Config& config)
-        : m_(m), m_max_(mMax), m_level_(mLevel), ef_construction_(efConstruction), out_file_(outFile), random_generator_(random_device_()), uniform_distribution_(0, 1), max_layer_(-1), entry_point_(-1)
+    LSMVec::LSMVec(const std::string& db_path,
+                   const LSMVecDBOptions& options,
+                   std::ostream &outFile)
+        : vector_dim_(options.dim),
+          db_options_(options),
+          m_(options.m),
+          m_max_(options.m_max),
+          m_level_(options.m_level),
+          ef_construction_(options.ef_construction),
+          out_file_(outFile),
+          random_generator_(random_device_()),
+          uniform_distribution_(0, 1),
+          max_layer_(-1),
+          entry_point_(-1)
     {
-        if(config.random_seed > 0){
-            random_generator_.seed(config.random_seed);
+        if (db_options_.random_seed > 0) {
+            random_generator_.seed(db_options_.random_seed);
+        }
+
+        if (db_options_.vector_file_path.empty()) {
+            db_options_.vector_file_path = db_path + "/vector.log";
         }
         
         initializeLogger(LogChoice::STDOUT, nullptr, LogSeverity::INFO);
 
         options_.create_if_missing = true;
-        options_.db_paths.emplace_back(rocksdb::DbPath(config.db_path, config.db_target_size));
+        options_.db_paths.emplace_back(rocksdb::DbPath(db_path, db_options_.db_target_size));
         options_.statistics = rocksdb::CreateDBStatistics();
 
         db_ = std::make_unique<rocksdb::RocksGraph>(
@@ -92,20 +108,20 @@ using namespace ROCKSDB_NAMESPACE;
             true
         );
 
-        if (config.vector_storage_type == 1) {
+        if (db_options_.vector_storage_type == 1) {
             printf("Using page-based vector storage layout\n");
             vector_storage_ = std::make_unique<PagedVectorStorage>(
-                config.vector_file_path,
-                static_cast<size_t>(vectorDim),
-                config.vec_file_capacity,
-                config.paged_max_cached_pages
+                db_options_.vector_file_path,
+                static_cast<size_t>(vector_dim_),
+                db_options_.vec_file_capacity,
+                db_options_.paged_max_cached_pages
             );
         } else {
             printf("Using plain vector storage layout\n");
             vector_storage_ = std::make_unique<BasicVectorStorage>(
-                config.vector_file_path,
-                static_cast<size_t>(vectorDim),
-                config.vec_file_capacity
+                db_options_.vector_file_path,
+                static_cast<size_t>(vector_dim_),
+                db_options_.vec_file_capacity
             );
         }
     }

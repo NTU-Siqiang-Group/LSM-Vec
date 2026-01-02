@@ -3,13 +3,14 @@
 #include <unordered_set>
 #include <vector>
 #include <random>
+#include <string>
 #include "rocksdb/graph.h"
 #include "rocksdb/db.h"
 #include "rocksdb/options.h"
 #include "rocksdb/statistics.h"
 #include <iostream>
 #include "disk_vector.h"
-#include "config.h"
+#include "lsm_vec_db.h"
 #include "statistics.h"
 #include "logger.h"
 
@@ -35,7 +36,9 @@ using namespace ROCKSDB_NAMESPACE;
             use_heuristic_neighbor_selection_ = useHeuristic;
         }
 
-        LSMVec(int m, int mMax, int mLevel, float efConstruction, std::ostream &outFile, int vectorDim, const Config& config);
+        LSMVec(const std::string& db_path,
+               const LSMVecDBOptions& options,
+               std::ostream &outFile);
 
         void insertNode(node_id_t nodeId, const std::vector<float> &vector);
         node_id_t knnSearch(const std::vector<float> &queryVector);
@@ -48,6 +51,7 @@ using namespace ROCKSDB_NAMESPACE;
         std::string vector_file_path_;
         int vector_dim_ = 0;
         std::unique_ptr<IVectorStorage> vector_storage_;
+        LSMVecDBOptions db_options_;
 
     private:
         int randomLevel();

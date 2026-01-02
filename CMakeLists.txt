@@ -56,6 +56,7 @@ include_directories(${ROCKSDB_INCLUDE_DIR})
 # Specify the source files
 set(SOURCES
     src/lsm_vec_index.cc
+    src/lsm_vec_db.cc
     src/utils.cc
     src/test.cc
 )

@@ -53,6 +53,24 @@ struct Config {
     std::string query_ext = ".fvecs";
     std::string truth_ext = ".ivecs";
 
+    static Config ForDatabase(const std::string& db_path_value,
+                              const std::string& vector_file_path_value,
+                              size_t vec_capacity_value,
+                              size_t paged_cache_pages_value,
+                              int vector_storage_type_value,
+                              uint64_t db_target_size_value,
+                              int random_seed_value) {
+        Config cfg_;
+        cfg_.db_path = db_path_value;
+        cfg_.vector_file_path = vector_file_path_value;
+        cfg_.vec_file_capacity = vec_capacity_value;
+        cfg_.paged_max_cached_pages = paged_cache_pages_value;
+        cfg_.vector_storage_type = vector_storage_type_value;
+        cfg_.db_target_size = db_target_size_value;
+        cfg_.random_seed = random_seed_value;
+        return cfg_;
+    }
+
     static void PrintHelp(const char* prog) {
         std::cout <<
 R"(Usage:
