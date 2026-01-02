@@ -1,14 +1,16 @@
 # Test Sample Build
 
-This directory contains the standalone test sample (`test.cc`) and a dedicated
-Makefile to build it without CMake.
+This directory contains a standalone test sample (`test.cc`) and a dedicated Makefile
+to build it without CMake.
+
+Unlike the older setup (compiling LSM-Vec sources directly), this test links against
+the compiled static library.
 
 ## Prerequisites
 
-* Build Aster (RocksDB fork) under `lib/aster` from the repo root:
+1) Build Aster (RocksDB fork) under `lib/aster` from the repo root:
 
 ```bash
-cd ..
 git submodule update --init --recursive
 cd lib/aster
 make static_lib -j"$(nproc)" DEBUG_LEVEL=0 DISABLE_WARNING_AS_ERROR=1 EXTRA_CXXFLAGS=-fPIC
