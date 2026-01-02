@@ -58,7 +58,7 @@ set(SOURCES
     src/lsm_vec_index.cc
     src/lsm_vec_db.cc
     src/utils.cc
-    src/test.cc
+    test/test.cc
 )
 
 # Add the executable target
