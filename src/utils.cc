@@ -68,17 +68,22 @@ std::vector<std::vector<int>> readIvecsFile(const std::string &filename)
 }
 
 // Function to insert vectors from a bvecs file into the HNSW graph
-void insertFromBigANNFile(lsm_vec::LSMVec &graph, const std::string &filename)
+void insertFromBigANNFile(lsm_vec::LSMVecDB &db, const std::string &filename)
 {
     auto data = readBvecsFile(filename);
     for (size_t i = 0; i < data.size(); ++i)
     {
-        graph.insertNode(static_cast<int>(i), data[i]);
+        auto status = db.Insert(static_cast<int>(i), lsm_vec::Span<float>(data[i]));
+        if (!status.ok())
+        {
+            std::cerr << "Insert failed for node " << i << ": " << status.ToString() << std::endl;
+            return;
+        }
     }
 }
 
 // Function to perform queries from a file and compare results with ground truth
-void queryBigANN(lsm_vec::LSMVec &graph, const std::string &queryFile, const std::string &groundTruthFile)
+void queryBigANN(lsm_vec::LSMVecDB &db, const std::string &queryFile, const std::string &groundTruthFile)
 {
     auto queries = readBvecsFile(queryFile);
     auto groundTruth = readIvecsFile(groundTruthFile);
@@ -91,10 +96,19 @@ void queryBigANN(lsm_vec::LSMVec &graph, const std::string &queryFile, const std
 
     int correctMatches = 0;
     int totalQueries = static_cast<int>(queries.size());
+    lsm_vec::SearchOptions search_options;
+    search_options.k = 1;
 
     for (size_t i = 0; i < queries.size(); ++i)
     {
-        int hnswResult = graph.knnSearch(queries[i]);
+        std::vector<lsm_vec::SearchResult> results;
+        auto status = db.SearchKnn(lsm_vec::Span<float>(queries[i]), search_options, &results);
+        if (!status.ok() || results.empty())
+        {
+            std::cerr << "Search failed for query " << i << ": " << status.ToString() << std::endl;
+            continue;
+        }
+        int hnswResult = results.front().id;
         int groundTruthResult = groundTruth[i][0]; // Assuming the first entry is the closest
 
         if (hnswResult == groundTruthResult)
@@ -163,7 +177,7 @@ int getdim(const std::string &filename)
 }
 
 // Function to insert vectors from an fvecs file into the HNSW graph
-void insertFromFile(lsm_vec::LSMVec &graph, const std::string &filename)
+void insertFromFile(lsm_vec::LSMVecDB &db, const std::string &filename)
 {
     std::ifstream input(filename, std::ios::binary);
     if (!input.is_open())
@@ -190,8 +204,7 @@ void insertFromFile(lsm_vec::LSMVec &graph, const std::string &filename)
     {
         if (node_count == 0)
         {
-            graph.vector_dim_ = dim;
-            std::cout << "vector dim: " << graph.vector_dim_ << std::endl;
+            std::cout << "vector dim: " << dim << std::endl;
         }
 
         std::vector<float> floatVec;
@@ -215,7 +228,12 @@ void insertFromFile(lsm_vec::LSMVec &graph, const std::string &filename)
             }
         }
 
-        graph.insertNode(static_cast<int>(node_count), finalVec);
+        auto status = db.Insert(static_cast<int>(node_count), lsm_vec::Span<float>(finalVec));
+        if (!status.ok())
+        {
+            std::cerr << "Insert failed for node " << node_count << ": " << status.ToString() << std::endl;
+            break;
+        }
 
         if (node_count % 1000 == 0)
         {
@@ -233,7 +251,7 @@ void insertFromFile(lsm_vec::LSMVec &graph, const std::string &filename)
 }
 
 // Function to perform queries from a file and compare results with ground truth
-void queryAndCompareWithGroundTruth(lsm_vec::LSMVec &graph, const std::string &queryFile, const std::string &groundTruthFile)
+void queryAndCompareWithGroundTruth(lsm_vec::LSMVecDB &db, const std::string &queryFile, const std::string &groundTruthFile)
 {
     auto queries = readFvecsFile(queryFile);
     auto groundTruth = readIvecsFile(groundTruthFile);
@@ -247,6 +265,8 @@ void queryAndCompareWithGroundTruth(lsm_vec::LSMVec &graph, const std::string &q
     int correctMatches = 0;
     int totalQueries = static_cast<int>(queries.size());
     double totalQueryTime = 0.0;
+    lsm_vec::SearchOptions search_options;
+    search_options.k = 1;
 
     for (size_t i = 0; i < queries.size(); ++i)
     {
@@ -254,7 +274,8 @@ void queryAndCompareWithGroundTruth(lsm_vec::LSMVec &graph, const std::string &q
         auto start = std::chrono::high_resolution_clock::now();
 
         // Perform the HNSW query
-        int hnswResult = graph.knnSearch(queries[i]);
+        std::vector<lsm_vec::SearchResult> results;
+        auto status = db.SearchKnn(lsm_vec::Span<float>(queries[i]), search_options, &results);
 
         // Stop measuring query time
         auto end = std::chrono::high_resolution_clock::now();
@@ -263,6 +284,13 @@ void queryAndCompareWithGroundTruth(lsm_vec::LSMVec &graph, const std::string &q
         // Accumulate query time
         totalQueryTime += queryTime.count();
 
+        if (!status.ok() || results.empty())
+        {
+            std::cerr << "Search failed for query " << i << ": " << status.ToString() << std::endl;
+            continue;
+        }
+
+        int hnswResult = results.front().id;
         // Get ground truth result
         int groundTruthResult = groundTruth[i][0]; // Assuming the first entry is the closest
 

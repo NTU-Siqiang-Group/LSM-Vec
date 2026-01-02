@@ -35,14 +35,31 @@ int main(int argc, char* argv[])
     options.random_seed = config.random_seed;
     options.vector_file_path = config.vector_file_path;
 
-    lsm_vec::LSMVec hnsw(config.db_path, options, outFile);
+    std::unique_ptr<lsm_vec::LSMVecDB> db;
+    auto open_status = lsm_vec::LSMVecDB::Open(config.db_path, options, &db);
+    if (!open_status.ok()) {
+        std::cerr << "Failed to open LSMVecDB: " << open_status.ToString() << "\n";
+        return 1;
+    }
 
     std::cout << "Inserting nodes from " << config.input_file_path << std::endl;
-    insertFromFile(hnsw, config.input_file_path);
-    hnsw.printState();
+    insertFromFile(*db, config.input_file_path);
+
+    std::vector<float> first_vec;
+    auto get_status = db->Get(0, &first_vec);
+    if (get_status.ok()) {
+        std::cout << "Fetched vector for id 0 with " << first_vec.size() << " dims" << std::endl;
+    } else {
+        std::cerr << "Get failed for id 0: " << get_status.ToString() << std::endl;
+    }
 
     std::cout << "Querying and comparing with ground truth " << config.query_file_path << std::endl;
-    queryAndCompareWithGroundTruth(hnsw, config.query_file_path, config.groundtruth_file_path);
+    queryAndCompareWithGroundTruth(*db, config.query_file_path, config.groundtruth_file_path);
+
+    auto delete_status = db->Delete(0);
+    if (!delete_status.ok()) {
+        std::cerr << "Delete failed for id 0: " << delete_status.ToString() << std::endl;
+    }
 
     return 0;
 }
