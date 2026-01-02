@@ -1,6 +1,8 @@
 #include "lsm_vec_index.h"
 #include "disk_vector.h"
+#include <algorithm>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <queue>
 #include <string>
@@ -148,6 +150,7 @@ using namespace ROCKSDB_NAMESPACE;
 
     void LSMVec::insertNode(node_id_t nodeId, const std::vector<float> &vector)
     {
+        deleted_ids_.erase(nodeId);
         bool vectorStored = false;  // Track whether we've stored this vector
 
         int highestLayer = randomLevel();
@@ -299,6 +302,100 @@ using namespace ROCKSDB_NAMESPACE;
             vector_storage_->storeVectorToDisk(nodeId, vector, sectionKey);
         }
 
+    }
+
+    Status LSMVec::deleteNode(node_id_t id)
+    {
+        deleted_ids_.insert(id);
+
+        for (auto& kv : nodes_) {
+            auto& neighbor_map = kv.second.neighbors;
+            for (auto& layer_entry : neighbor_map) {
+                auto& neighbors = layer_entry.second;
+                neighbors.erase(std::remove(neighbors.begin(), neighbors.end(), id), neighbors.end());
+            }
+        }
+
+        nodes_.erase(id);
+
+        rocksdb::Edges edges;
+        db_->GetAllEdges(id, &edges);
+        for (uint32_t i = 0; i < edges.num_edges_out; ++i) {
+            node_id_t neighborId = static_cast<node_id_t>(edges.nxts_out[i].nxt);
+            db_->DeleteEdge(id, neighborId);
+            db_->DeleteEdge(neighborId, id);
+        }
+
+        return Status::OK();
+    }
+
+    Status LSMVec::updateNode(node_id_t id, const std::vector<float>& vec)
+    {
+        Status delete_status = deleteNode(id);
+        if (!delete_status.ok()) {
+            return delete_status;
+        }
+
+        try {
+            insertNode(id, vec);
+        } catch (const std::exception& ex) {
+            return Status::IOError(ex.what());
+        }
+
+        return Status::OK();
+    }
+
+    Status LSMVec::getNodeVector(node_id_t id, std::vector<float>* out)
+    {
+        if (!out) {
+            return Status::InvalidArgument("output vector must not be null");
+        }
+        if (deleted_ids_.count(id) > 0) {
+            return Status::NotFound("vector deleted");
+        }
+
+        try {
+            vector_storage_->readVectorFromDisk(id, *out);
+        } catch (const std::exception& ex) {
+            return Status::IOError(ex.what());
+        }
+
+        return Status::OK();
+    }
+
+    std::vector<node_id_t> LSMVec::knnSearchK(const std::vector<float>& query, int k, int ef_search)
+    {
+        if (entry_point_ == k_invalid_node_id || k <= 0) {
+            return {};
+        }
+
+        node_id_t currentEntryPoint = entry_point_;
+        for (int l = max_layer_; l >= 1; --l) {
+            std::vector<node_id_t> nearest = searchLayer(query, currentEntryPoint, ef_search, l);
+            if (!nearest.empty()) {
+                currentEntryPoint = nearest[0];
+            }
+        }
+
+        int ef = std::max(ef_search, k);
+        std::vector<node_id_t> neighbors = searchLayer(query, currentEntryPoint, ef, 0);
+        if (neighbors.empty()) {
+            return neighbors;
+        }
+
+        std::vector<node_id_t> filtered;
+        filtered.reserve(static_cast<size_t>(k));
+        for (node_id_t id : neighbors) {
+            if (deleted_ids_.count(id) > 0) {
+                continue;
+            }
+            filtered.push_back(id);
+            if (static_cast<int>(filtered.size()) >= k) {
+                break;
+            }
+        }
+
+        return filtered;
     }
 
     // Links neighbors for upper layers stored in memory

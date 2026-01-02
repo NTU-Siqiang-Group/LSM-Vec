@@ -8,6 +8,7 @@
 #include "rocksdb/db.h"
 #include "rocksdb/options.h"
 #include "rocksdb/statistics.h"
+#include "rocksdb/status.h"
 #include <iostream>
 #include "disk_vector.h"
 #include "lsm_vec_db.h"
@@ -42,6 +43,10 @@ using namespace ROCKSDB_NAMESPACE;
 
         void insertNode(node_id_t nodeId, const std::vector<float> &vector);
         node_id_t knnSearch(const std::vector<float> &queryVector);
+        Status deleteNode(node_id_t id);
+        Status updateNode(node_id_t id, const std::vector<float>& vec);
+        Status getNodeVector(node_id_t id, std::vector<float>* out);
+        std::vector<node_id_t> knnSearchK(const std::vector<float>& query, int k, int ef_search);
         std::unordered_set<int> highest_layer_nodes_;
 
         void printIndexStatus() const;
@@ -107,5 +112,7 @@ using namespace ROCKSDB_NAMESPACE;
 
         // Store length for node
         std::vector<float> node_lengths_;
+
+        std::unordered_set<node_id_t> deleted_ids_;
     };
 } // namespace ROCKSDB_NAMESPACE
