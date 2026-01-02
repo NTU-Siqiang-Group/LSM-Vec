@@ -1,5 +1,8 @@
 # LSM-Vec
-LSM-Vec is a research prototype that builds an HNSW-style index on top of **Aster** (a RocksDB fork providing a graph API). Vectors are stored on disk via a pluggable vector storage layer.
+
+LSM-Vec is a research prototype that builds an HNSW-style index on top of **Aster**
+(a RocksDB fork providing a graph API). Vectors are stored on disk via a
+pluggable vector storage layer.
 
 ## Features
 
@@ -7,30 +10,25 @@ LSM-Vec is a research prototype that builds an HNSW-style index on top of **Aste
 * Layer-0 edges stored in **Aster RocksGraph**
 * Upper layers stored in memory
 * Two vector storage backends:
-
   * **BasicVectorStorage**: contiguous by logical ID
   * **PagedVectorStorage**: 4KB-page managed layout + FIFO page cache (user-space)
 
----
-
-## Repository layout (expected)
+## Repository layout
 
 ```
 LSM-Vec/
   include/
   src/
+  test/
   lib/
     aster/        # Aster submodule
   CMakeLists.txt
+  Makefile
 ```
-
----
 
 ## Dependencies
 
-### System packages
-
-On Ubuntu/Debian:
+### System packages (Ubuntu/Debian)
 
 ```bash
 sudo apt-get update
@@ -39,40 +37,51 @@ sudo apt-get install -y \
   libzstd-dev libsnappy-dev liblz4-dev libbz2-dev zlib1g-dev
 ```
 
+## Build
 
-
----
-
-## Build LSM-Vec
-
-To download and build Aster first, from the repo root:
+### 1) Build Aster
 
 ```bash
 git submodule update --init --recursive
-cd lib/aster
-make static_lib -j"$(nproc)" DEBUG_LEVEL=0 DISABLE_WARNING_AS_ERROR=1 EXTRA_CXXFLAGS=-fPIC
-cd ../..
+make aster
 ```
 
-To build LSM-Vec then:
+### 2) Build embeddable libraries
 
 ```bash
-rm -rf build
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
+make lib
 ```
 
-Binary output at:
+Outputs:
 
 ```
-build/bin/lsm_vec
+build/lib/liblsmvec.a
+build/lib/liblsmvec.so
 ```
 
----
+### 3) Build the example/test binary
 
-## Running
+```bash
+make bin
+```
 
-The program requires:
+The target `lsm_vec` is built from `test/test.cc` and is placed in `build/bin/`
+by default. If your generator overrides output paths, check the CMake build logs
+for the exact location.
+
+## Embedding
+
+Include headers from `include/` and link against `liblsmvec.a` or
+`liblsmvec.so`, plus the transitive dependencies:
+`rocksdb`, `zstd`, `snappy`, `lz4`, `bz2`, `z`, `jemalloc`, `pthread`, `dl`.
+When using the shared library, make sure the runtime can locate `liblsmvec.so`.
+
+## Testing
+
+The example/test entry point is the binary built from `test/test.cc`. It accepts
+CLI flags defined in `include/config.h` and expects a dataset on disk.
+
+### Required flags
 
 * `--db <path>`: DB directory (required)
 * dataset files: either via `--data-dir` (recommended) or explicit `--base/--query/--truth`
@@ -105,8 +114,6 @@ Example:
   --out ./run/output.txt
 ```
 
----
-
 ## CLI options
 
 ### Graph / index parameters
@@ -131,12 +138,9 @@ Example:
 * `--db <path>`: DB directory (required)
 * `--vec <path>`: vector file path (default: `<db>/vector.log`)
 * `--vec-storage <int>`:
-
   * `0` = BasicVectorStorage (default)
   * `1` = PagedVectorStorage (4KB pages + FIFO cache)
 * `--out <path>`: output file (default: `output.txt`)
-
----
 
 ## Notes on vector storage
 
@@ -151,8 +155,6 @@ Example:
 * Vectors never cross page boundaries
 * Page-level caching with FIFO eviction (`paged_max_cached_pages` inside `Config.h`)
 * Supports optional page prefetch by IDs
-
----
 
 ## Troubleshooting
 
@@ -171,4 +173,3 @@ You are missing `-lzstd` at link time, or `libzstd-dev` is not installed.
 
 * Install `libzstd-dev`
 * Ensure `target_link_libraries(... zstd ...)` is present (your current CMake does this)
-

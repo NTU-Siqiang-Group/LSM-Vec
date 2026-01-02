@@ -8,6 +8,7 @@ project(LSMVEC)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -Wall -Wextra -O2")
 
@@ -54,17 +55,11 @@ message(STATUS "Found RocksDB headers at ${ROCKSDB_INCLUDE_DIR}")
 include_directories(${ROCKSDB_INCLUDE_DIR})
 
 # Specify the source files
-set(SOURCES
+set(LIB_SOURCES
     src/lsm_vec_index.cc
     src/lsm_vec_db.cc
     src/utils.cc
-    test/test.cc
 )
-
-# Add the executable target
-add_executable(lsm_vec ${SOURCES})
-
-target_include_directories(lsm_vec PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 find_library(ZSTD_LIB zstd
     HINTS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib
@@ -76,7 +71,7 @@ endif()
 
 message(STATUS "Using ZSTD library at ${ZSTD_LIB}")
 
-target_link_libraries(lsm_vec PRIVATE
+set(LSMVEC_LINK_LIBS
     ${ROCKSDB_LIB}
     ${ZSTD_LIB}  
     snappy
@@ -87,6 +82,34 @@ target_link_libraries(lsm_vec PRIVATE
     dl
     jemalloc
 )
+
+# Add the library targets
+add_library(lsmvec_obj OBJECT ${LIB_SOURCES})
+target_include_directories(lsmvec_obj PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+add_library(lsmvec_static STATIC $<TARGET_OBJECTS:lsmvec_obj>)
+add_library(lsmvec_shared SHARED $<TARGET_OBJECTS:lsmvec_obj>)
+
+target_include_directories(lsmvec_static PUBLIC ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(lsmvec_shared PUBLIC ${CMAKE_SOURCE_DIR}/include)
+
+target_link_libraries(lsmvec_static PUBLIC ${LSMVEC_LINK_LIBS})
+target_link_libraries(lsmvec_shared PUBLIC ${LSMVEC_LINK_LIBS})
+
+set_target_properties(lsmvec_static PROPERTIES
+    OUTPUT_NAME lsmvec
+    ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+)
+
+set_target_properties(lsmvec_shared PROPERTIES
+    OUTPUT_NAME lsmvec
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+)
+
+# Add the executable target
+add_executable(lsm_vec test/test.cc)
+target_include_directories(lsm_vec PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(lsm_vec PRIVATE lsmvec_shared)
 
 # Set output directory for the executable
 set_target_properties(lsm_vec PROPERTIES
