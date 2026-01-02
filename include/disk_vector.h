@@ -45,6 +45,12 @@ public:
     virtual void readVectorFromDisk(node_id_t id,
                                     std::vector<float>& vec) = 0;
 
+    // Mark a vector as deleted for logical ID 'id'
+    virtual void deleteVector(node_id_t id) = 0;
+
+    // Check whether a vector exists (not deleted and assigned)
+    virtual bool exists(node_id_t id) const = 0;
+
     // Optional prefetch API. Default is no-op.
     virtual void prefetchByIds(const std::vector<node_id_t>& /*ids*/) {}
 };
@@ -52,17 +58,68 @@ public:
 class BasicVectorStorage : public IVectorStorage {
 private:
     std::string filePath_;
+    std::string deleteFilePath_;
     size_t dim_;          // number of floats per vector
     size_t totalVectors_; // capacity (# of logical IDs)
     size_t fileSizeBytes_;
 
     std::fstream fileStream_;
+    std::fstream deleteStream_;
+    std::vector<uint8_t> deletedFlags_;
+
+private:
+    void openDeleteFile() {
+        deleteStream_.open(deleteFilePath_,
+                           std::ios::in | std::ios::out | std::ios::binary);
+        if (!deleteStream_.is_open()) {
+            deleteStream_.open(deleteFilePath_,
+                               std::ios::out | std::ios::binary | std::ios::trunc);
+            if (!deleteStream_.is_open()) {
+                throw std::runtime_error("Failed to create delete marker file.");
+            }
+            deleteStream_.close();
+            deleteStream_.open(deleteFilePath_,
+                               std::ios::in | std::ios::out | std::ios::binary);
+            if (!deleteStream_.is_open()) {
+                throw std::runtime_error("Failed to open delete marker file.");
+            }
+        }
+
+        deleteStream_.seekp(0, std::ios::end);
+        size_t currentSize = static_cast<size_t>(deleteStream_.tellp());
+        if (currentSize < totalVectors_) {
+            deleteStream_.seekp(static_cast<std::streamoff>(totalVectors_ - 1),
+                                std::ios::beg);
+            char zero = 0;
+            deleteStream_.write(&zero, 1);
+            deleteStream_.flush();
+        }
+
+        deletedFlags_.assign(totalVectors_, 0);
+        deleteStream_.clear();
+        deleteStream_.seekg(0, std::ios::beg);
+        deleteStream_.read(reinterpret_cast<char*>(deletedFlags_.data()),
+                           static_cast<std::streamsize>(deletedFlags_.size()));
+    }
+
+    void writeDeleteFlag(node_id_t id, bool deleted) {
+        deletedFlags_[static_cast<size_t>(id)] = deleted ? 1 : 0;
+        deleteStream_.clear();
+        deleteStream_.seekp(static_cast<std::streamoff>(id), std::ios::beg);
+        char value = deleted ? 1 : 0;
+        deleteStream_.write(&value, 1);
+        deleteStream_.flush();
+        if (!deleteStream_.good()) {
+            throw std::runtime_error("Failed to update delete marker file.");
+        }
+    }
 
 public:
     BasicVectorStorage(const std::string& path,
                        size_t dim,
                        size_t numVectors)
         : filePath_(path),
+          deleteFilePath_(path + ".deleted"),
           dim_(dim),
           totalVectors_(numVectors)
     {
@@ -104,6 +161,8 @@ public:
             fileStream_.write(&zero, 1);
             fileStream_.flush();
         }
+
+        openDeleteFile();
     }
 
     ~BasicVectorStorage() override
@@ -111,6 +170,10 @@ public:
         if (fileStream_.is_open())
         {
             fileStream_.close();
+        }
+        if (deleteStream_.is_open())
+        {
+            deleteStream_.close();
         }
     }
 
@@ -146,6 +209,10 @@ public:
             throw std::runtime_error("Failed to write vector to file.");
         }
         fileStream_.flush();
+
+        if (deletedFlags_[static_cast<size_t>(id)] != 0) {
+            writeDeleteFlag(id, false);
+        }
     }
 
     void readVectorFromDisk(node_id_t id,
@@ -171,6 +238,26 @@ public:
             throw std::runtime_error("Failed to read vector from file.");
         }
     }
+
+    void deleteVector(node_id_t id) override
+    {
+        if (static_cast<size_t>(id) >= totalVectors_)
+        {
+            throw std::out_of_range("Vector ID out of range.");
+        }
+        if (deletedFlags_[static_cast<size_t>(id)] == 0) {
+            writeDeleteFlag(id, true);
+        }
+    }
+
+    bool exists(node_id_t id) const override
+    {
+        if (static_cast<size_t>(id) >= totalVectors_)
+        {
+            return false;
+        }
+        return deletedFlags_[static_cast<size_t>(id)] == 0;
+    }
 };
 
 class PagedVectorStorage : public IVectorStorage {
@@ -179,12 +266,15 @@ public:
 
 private:
     std::string filePath_;
+    std::string deleteFilePath_;
     size_t dim_;            // vector dimension
     size_t recordSize_;     // dim_ * sizeof(float)
     size_t totalVectors_;   // logical ID capacity
     size_t vectorsPerPage_; // how many vectors fit into one page (floor division)
 
     std::fstream fileStream_;
+    std::fstream deleteStream_;
+    std::vector<uint8_t> deletedFlags_;
 
     // logical ID -> page & slot mapping
     std::vector<int64_t>  idToPage_;       // -1 means unassigned
@@ -203,6 +293,7 @@ private:
 
     // For each sectionIdx, list of pages that still have free slots
     std::unordered_map<int,std::vector<size_t>> sectionOpenPages_;
+    std::unordered_map<int,std::vector<std::pair<size_t,uint16_t>>> sectionFreeSlots_;
 
     // Page cache (FIFO) in units of full pages (4KB each)
     size_t maxCachedPages_;
@@ -229,6 +320,52 @@ private:
             if (!fileStream_.is_open()) {
                 throw std::runtime_error("Failed to reopen vector file.");
             }
+        }
+    }
+
+    void openDeleteFile() {
+        deleteStream_.open(deleteFilePath_,
+                           std::ios::in | std::ios::out | std::ios::binary);
+        if (!deleteStream_.is_open()) {
+            deleteStream_.open(deleteFilePath_,
+                               std::ios::out | std::ios::binary | std::ios::trunc);
+            if (!deleteStream_.is_open()) {
+                throw std::runtime_error("Failed to create delete marker file.");
+            }
+            deleteStream_.close();
+            deleteStream_.open(deleteFilePath_,
+                               std::ios::in | std::ios::out | std::ios::binary);
+            if (!deleteStream_.is_open()) {
+                throw std::runtime_error("Failed to open delete marker file.");
+            }
+        }
+
+        deleteStream_.seekp(0, std::ios::end);
+        size_t currentSize = static_cast<size_t>(deleteStream_.tellp());
+        if (currentSize < totalVectors_) {
+            deleteStream_.seekp(static_cast<std::streamoff>(totalVectors_ - 1),
+                                std::ios::beg);
+            char zero = 0;
+            deleteStream_.write(&zero, 1);
+            deleteStream_.flush();
+        }
+
+        deletedFlags_.assign(totalVectors_, 0);
+        deleteStream_.clear();
+        deleteStream_.seekg(0, std::ios::beg);
+        deleteStream_.read(reinterpret_cast<char*>(deletedFlags_.data()),
+                           static_cast<std::streamsize>(deletedFlags_.size()));
+    }
+
+    void writeDeleteFlag(node_id_t id, bool deleted) {
+        deletedFlags_[static_cast<size_t>(id)] = deleted ? 1 : 0;
+        deleteStream_.clear();
+        deleteStream_.seekp(static_cast<std::streamoff>(id), std::ios::beg);
+        char value = deleted ? 1 : 0;
+        deleteStream_.write(&value, 1);
+        deleteStream_.flush();
+        if (!deleteStream_.good()) {
+            throw std::runtime_error("Failed to update delete marker file.");
         }
     }
 
@@ -341,6 +478,13 @@ private:
             sectionIdx = it->second;
         }
 
+        auto& freeList = sectionFreeSlots_[sectionIdx];
+        if (!freeList.empty()) {
+            auto [pageId, slot] = freeList.back();
+            freeList.pop_back();
+            return {pageId, slot};
+        }
+
         auto& openList = sectionOpenPages_[sectionIdx];
 
         // If there is a not-full page in this section, use it
@@ -382,6 +526,7 @@ public:
                   size_t capacity = 1000000,
                   size_t maxCachedPages = 128)
         : filePath_(path),
+          deleteFilePath_(path + ".deleted"),
           dim_(dim),
           recordSize_(dim * sizeof(float)),
           totalVectors_(capacity),
@@ -401,6 +546,7 @@ public:
         }
 
         openFile();
+        openDeleteFile();
 
         idToPage_.assign(totalVectors_, -1);
         idToSlotInPage_.assign(totalVectors_, 0);
@@ -409,6 +555,9 @@ public:
     ~PagedVectorStorage() {
         if (fileStream_.is_open()) {
             fileStream_.close();
+        }
+        if (deleteStream_.is_open()) {
+            deleteStream_.close();
         }
     }
 
@@ -442,6 +591,9 @@ public:
             // Overwrite existing slot
             writeRecord(static_cast<size_t>(curPage), curSlot, vec);
             updateCacheAfterWrite(static_cast<size_t>(curPage), curSlot, vec);
+            if (deletedFlags_[static_cast<size_t>(id)] != 0) {
+                writeDeleteFlag(id, false);
+            }
             return;
         }
 
@@ -451,6 +603,9 @@ public:
 
         writeRecord(pageId, slot, vec);
         updateCacheAfterWrite(pageId, slot, vec);
+        if (deletedFlags_[static_cast<size_t>(id)] != 0) {
+            writeDeleteFlag(id, false);
+        }
     }
 
     // Backward-compatible version: if you don't care about sections,
@@ -499,6 +654,38 @@ public:
         if (!fileStream_.good()) {
             throw std::runtime_error("Failed to read vector from file.");
         }
+    }
+
+    void deleteVector(node_id_t id) override
+    {
+        if (static_cast<size_t>(id) >= totalVectors_) {
+            throw std::out_of_range("Vector ID out of range.");
+        }
+        if (deletedFlags_[static_cast<size_t>(id)] != 0) {
+            return;
+        }
+
+        int64_t page = idToPage_[static_cast<size_t>(id)];
+        uint16_t slot = idToSlotInPage_[static_cast<size_t>(id)];
+        if (page >= 0) {
+            int sectionIdx = pages_[static_cast<size_t>(page)].sectionIdx;
+            sectionFreeSlots_[sectionIdx].emplace_back(static_cast<size_t>(page), slot);
+            idToPage_[static_cast<size_t>(id)] = -1;
+            idToSlotInPage_[static_cast<size_t>(id)] = 0;
+        }
+
+        writeDeleteFlag(id, true);
+    }
+
+    bool exists(node_id_t id) const override
+    {
+        if (static_cast<size_t>(id) >= totalVectors_) {
+            return false;
+        }
+        if (deletedFlags_[static_cast<size_t>(id)] != 0) {
+            return false;
+        }
+        return idToPage_[static_cast<size_t>(id)] >= 0;
     }
 
     // Prefetch pages corresponding to given vector IDs.

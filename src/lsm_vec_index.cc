@@ -307,6 +307,11 @@ using namespace ROCKSDB_NAMESPACE;
     Status LSMVec::deleteNode(node_id_t id)
     {
         deleted_ids_.insert(id);
+        try {
+            vector_storage_->deleteVector(id);
+        } catch (const std::exception& ex) {
+            return Status::IOError(ex.what());
+        }
 
         for (auto& kv : nodes_) {
             auto& neighbor_map = kv.second.neighbors;
@@ -351,6 +356,9 @@ using namespace ROCKSDB_NAMESPACE;
             return Status::InvalidArgument("output vector must not be null");
         }
         if (deleted_ids_.count(id) > 0) {
+            return Status::NotFound("vector deleted");
+        }
+        if (!vector_storage_->exists(id)) {
             return Status::NotFound("vector deleted");
         }
 
