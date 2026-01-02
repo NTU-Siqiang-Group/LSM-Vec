@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <string>
+#include <chrono>
 #include "lsm_vec_db.h"
 
 // Reads vectors from a bvecs file
