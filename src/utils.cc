@@ -1,7 +1,6 @@
 #include "utils.h"
 #include <fstream>
 #include <iostream>
-
 // Function to read vectors from a bvecs file
 std::vector<std::vector<float>> readBvecsFile(const std::string &filename)
 {
@@ -245,7 +244,7 @@ void insertFromFile(lsm_vec::LSMVecDB &db, const std::string &filename)
 
     auto end = std::chrono::high_resolution_clock::now();
     double duration = std::chrono::duration<double>(end - start).count();
-    std::cout << "Building "<< node_count <<" nodes took " << duration << " seconds" << std::endl;
+    std::cout << "Building " << node_count << " nodes took " << duration << " seconds" << std::endl;
 
     input.close();
 }

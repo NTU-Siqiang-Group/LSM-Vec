@@ -17,6 +17,7 @@ struct Config {
     float efConstruction = 64.0f;
     size_t input_size;
     int random_seed = 12345;
+    bool enable_stats = false;
 
     int vector_storage_type = 0; // 0 for basic, 1 for paged
 
@@ -78,6 +79,7 @@ R"(Usage:
        (--data-dir <dir> [--name <prefix>] | --base <fvecs> --query <fvecs> --truth <ivecs>) \
        [--M <int>] [--Mmax <int>] [--Ml <int>] [--efc <float>] \
        [--db-target-size <bytes>] [--out <file>] \
+       [--stats <0|1>] \
        [--edge-policy <eager|lazy|none>] \
        [-h|--help]
 
@@ -103,7 +105,13 @@ Short aliases:
         std::unordered_map<std::string, std::string> kv;
 
         auto put = [&](const std::string& k, const std::string& v){
-            if (!v.empty()) kv[k] = v;
+            if (!v.empty()) {
+                kv[k] = v;
+                return;
+            }
+            if (k == "stats") {
+                kv[k] = "1";
+            }
         };
 
         // Parse GNU-style flags
@@ -154,6 +162,7 @@ Short aliases:
 
         if (kv.count("out"))                cfg_.output_path = kv["out"];
         if (kv.count("edge-policy"))        cfg_.edge_update_policy = kv["edge-policy"];
+        if (kv.count("stats"))              cfg_.enable_stats = (kv["stats"] != "0");
 
         if (kv.count("M"))                  cfg_.M = parseI(kv["M"]);
         if (kv.count("Mmax"))               cfg_.Mmax = parseI(kv["Mmax"]);
@@ -181,14 +190,14 @@ Short aliases:
 
         if (!have_all_explicit) {
             if (cfg_.data_dir.empty()) {
-                std::ostringstream oss;
-                oss << "Missing dataset specification. Provide either:\n"
-                    << "  (A) --base --query --truth, or\n"
-                    << "  (B) --data-dir [--name]\n\n";
-                std::cerr << oss.str();
-                PrintHelp(argv[0]);
-                std::exit(1);
-            }
+            std::ostringstream oss;
+            oss << "Missing dataset specification. Provide either:\n"
+                << "  (A) --base --query --truth, or\n"
+                << "  (B) --data-dir [--name]\n\n";
+            std::cerr << oss.str();
+            PrintHelp(argv[0]);
+            std::exit(1);
+        }
             // Derive paths from data_dir (+ optional data_name)
             namespace fs = std::filesystem;
             auto join = [](const fs::path& a, const std::string& b) {

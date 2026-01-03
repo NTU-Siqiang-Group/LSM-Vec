@@ -1,4 +1,3 @@
-#include <iostream>
 #include <fstream>
 #include <vector>
 #include <string>
@@ -33,6 +32,7 @@ int main(int argc, char* argv[])
     options.vector_storage_type = config.vector_storage_type;
     options.db_target_size = config.db_target_size;
     options.random_seed = config.random_seed;
+    options.enable_stats = config.enable_stats;
     options.vector_file_path = config.vector_file_path;
 
     std::unique_ptr<lsm_vec::LSMVecDB> db;

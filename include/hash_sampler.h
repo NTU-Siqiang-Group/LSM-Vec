@@ -74,7 +74,7 @@ namespace lsm_vec
                 }
             }
             
-            std::cout << "Initialized " << hashBits << " projection vectors for " 
+            std::cout << "Initialized " << hashBits << " projection vectors for "
                       << vectorDim << "-dimensional space" << std::endl;
         }
 

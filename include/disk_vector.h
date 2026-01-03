@@ -625,7 +625,7 @@ public:
         uint16_t slot = idToSlotInPage_[static_cast<size_t>(id)];
 
         if (page < 0) {
-            std::printf("Problematic id: %ld\n", id);
+            std::fprintf(stderr, "Problematic id: %lu\n", static_cast<unsigned long>(id));
             throw std::runtime_error("Vector slot not assigned for this ID.");
         }
 

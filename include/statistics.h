@@ -22,6 +22,34 @@ public:
 
     void setEnabled(bool enabled) { enabled_ = enabled; }
     bool enabled() const { return enabled_; }
+    void reset() {
+        io_time = 0.0;
+        indexing_time = 0.0;
+        search_time = 0.0;
+        insert_count = 0;
+        search_count = 0;
+
+        io_count = 0;
+        read_io_count = 0;
+        write_node_io_count = 0;
+        add_edge_io_count = 0;
+        delete_edge_io_count = 0;
+
+        read_io_time = 0.0;
+        write_node_io_time = 0.0;
+        add_edge_io_time = 0.0;
+        delete_edge_io_time = 0.0;
+
+        read_vertex_property_count = 0;
+        read_edges_count = 0;
+        read_vertex_property_time = 0.0;
+        read_edges_time = 0.0;
+
+        vec_read_count = 0;
+        vec_read_time = 0.0;
+        vec_write_count = 0;
+        vec_write_time = 0.0;
+    }
 
     // ------------------------------------------------------------
     // Generic timing API
@@ -76,6 +104,10 @@ public:
     // High-level times
     double io_time       = 0.0; // total Aster I/O time
     double indexing_time = 0.0; // total indexing time
+    double search_time   = 0.0; // total query time
+
+    std::size_t insert_count = 0;
+    std::size_t search_count = 0;
 
     // AsterDB I/O counters and times
     std::size_t io_count            = 0;
@@ -111,6 +143,9 @@ public:
         }
 
         os << "Indexing Time: " << indexing_time << " seconds\n";
+        os << "Search Time: " << search_time << " seconds\n";
+        os << "Insert Operations: " << insert_count << "\n";
+        os << "Search Operations: " << search_count << "\n";
 
         os << "-------graph part------\n";
         os << "Total Aster I/O Operations: " << io_count << "\n";
@@ -142,4 +177,4 @@ private:
     bool enabled_ = false;
 };
 
-} // namespace ROCKSDB_NAMESPACE
+} // namespace lsm_vec

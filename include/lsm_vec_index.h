@@ -61,6 +61,11 @@ using namespace ROCKSDB_NAMESPACE;
     private:
         int randomLevel();
         float euclideanDistance(const std::vector<float> &vectorA, const std::vector<float> &vectorB) const;
+        void storeVectorWithStats(node_id_t id,
+                                  const std::vector<float>& vec,
+                                  node_id_t sectionKey);
+        void readVectorWithStats(node_id_t id,
+                                 std::vector<float>& vec);
         std::vector<node_id_t> searchLayer(const std::vector<float> &queryVector, node_id_t entryPointId, int efSearch, int layer);
         void linkNeighbors(node_id_t nodeId, const std::vector<node_id_t> &neighborIds, int layer);
         void linkNeighborsAsterDB(node_id_t nodeId, const std::vector<node_id_t> &neighborIds);

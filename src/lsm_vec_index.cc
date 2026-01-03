@@ -32,15 +32,15 @@ float uniform(
 {
     if (min > max)
     {
-        printf("input error\n");
-        exit(0);
+        LOG(ERR) << "uniform input error: min > max";
+        throw std::runtime_error("uniform input error: min > max");
     }
 
     float x = min + (max - min) * (float)rand() / (float)RAND_MAX;
     if (x < min || x > max)
     {
-        printf("input error\n");
-        exit(0);
+        LOG(ERR) << "uniform input error: generated value out of range";
+        throw std::runtime_error("uniform input error: generated value out of range");
     }
 
     return x;
@@ -55,8 +55,8 @@ float gaussian(  // r.v. from Gaussian(mean, sigma)
 
     if (sigma <= 0.0f)
     {
-        printf("input error\n");
-        exit(0);
+        LOG(ERR) << "gaussian input error: sigma must be positive";
+        throw std::runtime_error("gaussian input error: sigma must be positive");
     }
 
     float u1, u2;
@@ -89,6 +89,8 @@ using namespace ROCKSDB_NAMESPACE;
           max_layer_(-1),
           entry_point_(-1)
     {
+        stats.setEnabled(db_options_.enable_stats);
+
         if (db_options_.random_seed > 0) {
             random_generator_.seed(db_options_.random_seed);
         }
@@ -97,8 +99,6 @@ using namespace ROCKSDB_NAMESPACE;
             db_options_.vector_file_path = db_path + "/vector.log";
         }
         
-        initializeLogger(LogChoice::STDOUT, nullptr, LogSeverity::INFO);
-
         options_.create_if_missing = true;
         options_.db_paths.emplace_back(rocksdb::DbPath(db_path, db_options_.db_target_size));
         options_.statistics = rocksdb::CreateDBStatistics();
@@ -111,7 +111,7 @@ using namespace ROCKSDB_NAMESPACE;
         );
 
         if (db_options_.vector_storage_type == 1) {
-            printf("Using page-based vector storage layout\n");
+            LOG(INFO) << "Using page-based vector storage layout";
             vector_storage_ = std::make_unique<PagedVectorStorage>(
                 db_options_.vector_file_path,
                 static_cast<size_t>(vector_dim_),
@@ -119,7 +119,7 @@ using namespace ROCKSDB_NAMESPACE;
                 db_options_.paged_max_cached_pages
             );
         } else {
-            printf("Using plain vector storage layout\n");
+            LOG(INFO) << "Using plain vector storage layout";
             vector_storage_ = std::make_unique<BasicVectorStorage>(
                 db_options_.vector_file_path,
                 static_cast<size_t>(vector_dim_),
@@ -148,11 +148,49 @@ using namespace ROCKSDB_NAMESPACE;
         return std::sqrt(sum);
     }
 
+    void LSMVec::storeVectorWithStats(node_id_t id,
+                                      const std::vector<float>& vec,
+                                      node_id_t sectionKey)
+    {
+        auto timer = stats.startTimer();
+        try {
+            vector_storage_->storeVectorToDisk(id, vec, sectionKey);
+        } catch (...) {
+            stats.accumulateTime(timer, stats.vec_write_time);
+            stats.addCount(1, stats.vec_write_count);
+            throw;
+        }
+        stats.accumulateTime(timer, stats.vec_write_time);
+        stats.addCount(1, stats.vec_write_count);
+        if (timer.active) {
+            DLOG(DEBUG) << "vector_write id=" << id << " time_s=" << timer.duration;
+        }
+    }
+
+    void LSMVec::readVectorWithStats(node_id_t id,
+                                     std::vector<float>& vec)
+    {
+        auto timer = stats.startTimer();
+        try {
+            vector_storage_->readVectorFromDisk(id, vec);
+        } catch (...) {
+            stats.accumulateTime(timer, stats.vec_read_time);
+            stats.addCount(1, stats.vec_read_count);
+            throw;
+        }
+        stats.accumulateTime(timer, stats.vec_read_time);
+        stats.addCount(1, stats.vec_read_count);
+        if (timer.active) {
+            DLOG(DEBUG) << "vector_read id=" << id << " time_s=" << timer.duration;
+        }
+    }
+
     void LSMVec::insertNode(node_id_t nodeId, const std::vector<float> &vector)
     {
         deleted_ids_.erase(nodeId);
         bool vectorStored = false;  // Track whether we've stored this vector
 
+        auto insert_timer = stats.startTimer();
         int highestLayer = randomLevel();
 
         if (highestLayer > 0)
@@ -172,9 +210,16 @@ using namespace ROCKSDB_NAMESPACE;
 
             // For the first node, we can just use nodeId as sectionKey
             node_id_t sectionKey = nodeId;
-            vector_storage_->storeVectorToDisk(nodeId, vector, sectionKey);
+            storeVectorWithStats(nodeId, vector, sectionKey);
             vectorStored = true;
 
+            stats.accumulateTime(insert_timer, stats.indexing_time);
+            stats.addCount(1, stats.insert_count);
+            if (insert_timer.active) {
+                LOG(INFO) << "insert_node id=" << nodeId
+                          << " layer=" << highestLayer
+                          << " time_s=" << insert_timer.duration;
+            }
             return;
         }
 
@@ -220,7 +265,7 @@ using namespace ROCKSDB_NAMESPACE;
             // When we first reach level 0, store the vector using sectionKey
             if (l == 0 && !vectorStored)
             {
-                vector_storage_->storeVectorToDisk(nodeId, vector, sectionKey);
+                storeVectorWithStats(nodeId, vector, sectionKey);
                 vectorStored = true;
             }
 
@@ -265,7 +310,7 @@ using namespace ROCKSDB_NAMESPACE;
                         }
 
                         std::vector<float> neighborVector;
-                        vector_storage_->readVectorFromDisk(neighbor, neighborVector);
+                        readVectorWithStats(neighbor, neighborVector);
 
                         std::vector<node_id_t> eNewConn =
                             selectNeighbors(neighborVector, eConns, m_max_, l);
@@ -292,16 +337,23 @@ using namespace ROCKSDB_NAMESPACE;
         {
             entry_point_ = nodeId;
             max_layer_   = highestLayer;
-            std::cout << "Updated entry point to node " << nodeId
-                    << " at layer " << highestLayer << std::endl;
+            LOG(INFO) << "Updated entry point to node " << nodeId
+                      << " at layer " << highestLayer;
         }
 
         // Safety: in principle vectorStored must be true if we reached here.
         if (!vectorStored)
         {
-            vector_storage_->storeVectorToDisk(nodeId, vector, sectionKey);
+            storeVectorWithStats(nodeId, vector, sectionKey);
         }
 
+        stats.accumulateTime(insert_timer, stats.indexing_time);
+        stats.addCount(1, stats.insert_count);
+        if (insert_timer.active) {
+            LOG(INFO) << "insert_node id=" << nodeId
+                      << " layer=" << highestLayer
+                      << " time_s=" << insert_timer.duration;
+        }
     }
 
     Status LSMVec::deleteNode(node_id_t id)
@@ -363,7 +415,7 @@ using namespace ROCKSDB_NAMESPACE;
         }
 
         try {
-            vector_storage_->readVectorFromDisk(id, *out);
+            readVectorWithStats(id, *out);
         } catch (const std::exception& ex) {
             return Status::IOError(ex.what());
         }
@@ -377,6 +429,7 @@ using namespace ROCKSDB_NAMESPACE;
             return {};
         }
 
+        auto search_timer = stats.startTimer();
         node_id_t currentEntryPoint = entry_point_;
         for (int l = max_layer_; l >= 1; --l) {
             std::vector<node_id_t> nearest = searchLayer(query, currentEntryPoint, ef_search, l);
@@ -403,6 +456,12 @@ using namespace ROCKSDB_NAMESPACE;
             }
         }
 
+        stats.accumulateTime(search_timer, stats.search_time);
+        stats.addCount(1, stats.search_count);
+        if (search_timer.active) {
+            DLOG(DEBUG) << "knn_search_k k=" << k
+                        << " time_s=" << search_timer.duration;
+        }
         return filtered;
     }
 
@@ -460,7 +519,7 @@ using namespace ROCKSDB_NAMESPACE;
                 else if (layer == 0)
                 {
                     std::vector<float> candidateVector;
-                    vector_storage_->readVectorFromDisk(candidateId, candidateVector);
+                    readVectorWithStats(candidateId, candidateVector);
                     dist = euclideanDistance(vector, candidateVector);
                 }
 
@@ -512,7 +571,7 @@ using namespace ROCKSDB_NAMESPACE;
                 if (it != vecCache.end()) return it->second;
 
                 std::vector<float> v;
-                vector_storage_->readVectorFromDisk(nodeId, v);
+                readVectorWithStats(nodeId, v);
 
                 auto res = vecCache.emplace(nodeId, std::move(v));
                 return res.first->second;
@@ -613,7 +672,7 @@ using namespace ROCKSDB_NAMESPACE;
                 if (it != vecCache.end()) return it->second;
 
                 std::vector<float> v;
-                vector_storage_->readVectorFromDisk(nodeId, v);
+                readVectorWithStats(nodeId, v);
 
                 auto res = vecCache.emplace(nodeId, std::move(v));
                 return res.first->second;
@@ -679,7 +738,7 @@ using namespace ROCKSDB_NAMESPACE;
                                              int layer)
     {
         if (layer < 0) {
-            std::cerr << "Error: Invalid layer for search.\n";
+            LOG(ERR) << "Invalid layer for search";
             return {};
         }
         if (efSearch <= 0) {
@@ -704,7 +763,7 @@ using namespace ROCKSDB_NAMESPACE;
             } else {
                 // Level 0: vectors are on disk
                 std::vector<float> v;
-                vector_storage_->readVectorFromDisk(nodeId, v);
+                readVectorWithStats(nodeId, v);
                 return euclideanDistance(queryVector, v);
             }
         };
@@ -761,7 +820,7 @@ using namespace ROCKSDB_NAMESPACE;
 
                     if (visited.insert(neighborId).second) {
                         std::vector<float> neighborVec;
-                        vector_storage_->readVectorFromDisk(neighborId, neighborVec);
+                        readVectorWithStats(neighborId, neighborVec);
 
                         float d = euclideanDistance(queryVector, neighborVec);
                         if (static_cast<int>(nearest.size()) < efSearch || d < nearest.top().first) {
@@ -956,6 +1015,7 @@ using namespace ROCKSDB_NAMESPACE;
     // Performs a greedy search to find the closest neighbor at a specific layer
     node_id_t LSMVec::knnSearch(const std::vector<float> &queryVector)
     {
+        auto search_timer = stats.startTimer();
         // W ← ∅ set for the current nearest elements
         std::vector<node_id_t> nearestNeighbors; // W: dynamic list of found nearest neighbors
 
@@ -970,6 +1030,12 @@ using namespace ROCKSDB_NAMESPACE;
         }
         nearestNeighbors = searchLayer(queryVector, currentEntryPoint, 30, 0);
 
+        stats.accumulateTime(search_timer, stats.search_time);
+        stats.addCount(1, stats.search_count);
+        if (search_timer.active) {
+            LOG(INFO) << "knn_search time_s=" << search_timer.duration
+                      << " result=" << nearestNeighbors[0];
+        }
         return nearestNeighbors[0];
     }
 
@@ -977,8 +1043,8 @@ using namespace ROCKSDB_NAMESPACE;
     {
         // We do not print layer 0 by request.
         if (max_layer_ <= 0) {
-            std::cout << "HNSW state: max_layer=" << max_layer_
-                    << " (no upper layers to report)\n";
+            LOG(INFO) << "HNSW state: max_layer=" << max_layer_
+                      << " (no upper layers to report)";
             return;
         }
 
@@ -1013,16 +1079,25 @@ using namespace ROCKSDB_NAMESPACE;
             }
         }
 
-        std::cout << "HNSW state:\n";
-        std::cout << "  max_layer: " << max_layer_ << "\n";
-        std::cout << "  upper_layers: [1.." << max_layer_ << "]\n";
+        std::ostringstream oss;
+        oss << "HNSW state:\n";
+        oss << "  max_layer: " << max_layer_ << "\n";
+        oss << "  upper_layers: [1.." << max_layer_ << "]\n";
 
         // Print top-down for readability
         for (int l = max_layer_; l >= 1; --l) {
-            std::cout << "  layer " << l << ": "
-                    << layerNodeCounts[static_cast<std::size_t>(l)]
-                    << " nodes\n";
+            oss << "  layer " << l << ": "
+                << layerNodeCounts[static_cast<std::size_t>(l)]
+                << " nodes\n";
         }
+        LOG(INFO) << oss.str();
+    }
+
+    void LSMVec::printStatistics() const
+    {
+        std::ostringstream oss;
+        stats.print(oss);
+        LOG(INFO) << oss.str();
     }
 
     // void LSMVec::printStatistics() const
