@@ -12,11 +12,6 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -Wall -Wextra -O2")
 
-find_package(Boost REQUIRED)
-include_directories(PRIVATE ${Boost_INCLUDE_DIRS})
-find_library(JEMALLOC_LIB jemalloc HINTS "$(brew --prefix jemalloc)/lib")
-include_directories(PRIVATE ${JEMALLOC_LIB})
-
 set(ASTER_ROCKSDB_ROOT ${CMAKE_SOURCE_DIR}/lib/aster)
 
 find_library(ROCKSDB_LIB rocksdb
@@ -80,7 +75,6 @@ set(LSMVEC_LINK_LIBS
     z
     pthread
     dl
-    jemalloc
 )
 
 # Add the library targets

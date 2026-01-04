@@ -668,8 +668,11 @@ public:
         int64_t page = idToPage_[static_cast<size_t>(id)];
         uint16_t slot = idToSlotInPage_[static_cast<size_t>(id)];
         if (page >= 0) {
-            int sectionIdx = pages_[static_cast<size_t>(page)].sectionIdx;
-            sectionFreeSlots_[sectionIdx].emplace_back(static_cast<size_t>(page), slot);
+            size_t pageIndex = static_cast<size_t>(page);
+            if (pageIndex < pages_.size()) {
+                int sectionIdx = pages_[pageIndex].sectionIdx;
+                sectionFreeSlots_[sectionIdx].emplace_back(pageIndex, slot);
+            }
             idToPage_[static_cast<size_t>(id)] = -1;
             idToSlotInPage_[static_cast<size_t>(id)] = 0;
         }

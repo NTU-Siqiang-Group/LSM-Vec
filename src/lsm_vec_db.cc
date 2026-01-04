@@ -18,8 +18,8 @@ LSMVecDB::LSMVecDB(const LSMVecDBOptions& options,
                    std::unique_ptr<LSMVec> index,
                    std::unique_ptr<std::ostream> log_stream)
     : options_(options),
-      index_(std::move(index)),
-      log_stream_(std::move(log_stream))
+      log_stream_(std::move(log_stream)),
+      index_(std::move(index))
 {
 }
 
@@ -134,6 +134,11 @@ Status LSMVecDB::Update(node_id_t id, Span<float> vec)
 Status LSMVecDB::Delete(node_id_t id)
 {
     deleted_ids_.insert(id);
+    Status delete_status = index_->deleteNode(id);
+    if (!delete_status.ok()) {
+        deleted_ids_.erase(id);
+        return delete_status;
+    }
     return Status::OK();
 }
 

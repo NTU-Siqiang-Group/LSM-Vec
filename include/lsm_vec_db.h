@@ -94,8 +94,8 @@ private:
     float ComputeDistance(Span<float> a, Span<float> b) const;
 
     LSMVecDBOptions options_;
-    std::unique_ptr<class LSMVec> index_;
     std::unique_ptr<std::ostream> log_stream_;
+    std::unique_ptr<class LSMVec> index_;
     std::unordered_set<node_id_t> deleted_ids_;
 };
 } // namespace lsm_vec

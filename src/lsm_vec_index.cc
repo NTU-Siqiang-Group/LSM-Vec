@@ -127,6 +127,9 @@ using namespace ROCKSDB_NAMESPACE;
             );
         }
     }
+
+
+
     // Generates a random level for the node
     int LSMVec::randomLevel()
     {
@@ -162,9 +165,6 @@ using namespace ROCKSDB_NAMESPACE;
         }
         stats.accumulateTime(timer, stats.vec_write_time);
         stats.addCount(1, stats.vec_write_count);
-        if (timer.active) {
-            DLOG(DEBUG) << "vector_write id=" << id << " time_s=" << timer.duration;
-        }
     }
 
     void LSMVec::readVectorWithStats(node_id_t id,
@@ -180,9 +180,6 @@ using namespace ROCKSDB_NAMESPACE;
         }
         stats.accumulateTime(timer, stats.vec_read_time);
         stats.addCount(1, stats.vec_read_count);
-        if (timer.active) {
-            DLOG(DEBUG) << "vector_read id=" << id << " time_s=" << timer.duration;
-        }
     }
 
     void LSMVec::insertNode(node_id_t nodeId, const std::vector<float> &vector)
@@ -324,6 +321,7 @@ using namespace ROCKSDB_NAMESPACE;
                             }
                         }
                     }
+                    rocksdb::free_edges(&edges);
                 }
             }
 
@@ -349,11 +347,6 @@ using namespace ROCKSDB_NAMESPACE;
 
         stats.accumulateTime(insert_timer, stats.indexing_time);
         stats.addCount(1, stats.insert_count);
-        if (insert_timer.active) {
-            LOG(INFO) << "insert_node id=" << nodeId
-                      << " layer=" << highestLayer
-                      << " time_s=" << insert_timer.duration;
-        }
     }
 
     Status LSMVec::deleteNode(node_id_t id)
@@ -382,6 +375,7 @@ using namespace ROCKSDB_NAMESPACE;
             db_->DeleteEdge(id, neighborId);
             db_->DeleteEdge(neighborId, id);
         }
+        rocksdb::free_edges(&edges);
 
         return Status::OK();
     }
@@ -832,6 +826,7 @@ using namespace ROCKSDB_NAMESPACE;
                         }
                     }
                 }
+                rocksdb::free_edges(&edges);
             }
         }
 
@@ -1032,10 +1027,6 @@ using namespace ROCKSDB_NAMESPACE;
 
         stats.accumulateTime(search_timer, stats.search_time);
         stats.addCount(1, stats.search_count);
-        if (search_timer.active) {
-            LOG(INFO) << "knn_search time_s=" << search_timer.duration
-                      << " result=" << nearestNeighbors[0];
-        }
         return nearestNeighbors[0];
     }
 

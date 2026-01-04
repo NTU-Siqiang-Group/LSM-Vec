@@ -41,6 +41,7 @@ using namespace ROCKSDB_NAMESPACE;
                const LSMVecDBOptions& options,
                std::ostream &outFile);
 
+
         void insertNode(node_id_t nodeId, const std::vector<float> &vector);
         node_id_t knnSearch(const std::vector<float> &queryVector);
         Status deleteNode(node_id_t id);
@@ -103,8 +104,9 @@ using namespace ROCKSDB_NAMESPACE;
         int m_level_;                // Normalization factor for level generation
         float ef_construction_;      // Parameter for candidate selection
 
-        rocksdb::Options options_;
         std::unique_ptr<rocksdb::RocksGraph> db_;
+        rocksdb::Options options_;
+        
         std::ostream &out_file_;     // Output stream for logging
 
         std::unordered_map<int, Node> nodes_; // In-memory nodes for layers > 0
@@ -119,5 +121,6 @@ using namespace ROCKSDB_NAMESPACE;
         std::vector<float> node_lengths_;
 
         std::unordered_set<node_id_t> deleted_ids_;
+
     };
 } // namespace ROCKSDB_NAMESPACE
