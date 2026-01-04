@@ -3,6 +3,7 @@
 #include <cmath>
 #include <exception>
 #include <fstream>
+#include <limits>
 
 #include "lsm_vec_index.h"
 #include "logger.h"
@@ -69,14 +70,46 @@ Status LSMVecDB::ValidateVector(Span<float> vec) const
 
 Status LSMVecDB::EnsureMetricSupported() const
 {
-    if (options_.metric != DistanceMetric::kL2) {
-        return Status::NotSupported("only L2 distance is supported");
+    if (options_.metric != DistanceMetric::kL2 &&
+        options_.metric != DistanceMetric::kCosine) {
+        return Status::NotSupported("unsupported distance metric");
     }
     return Status::OK();
 }
 
 float LSMVecDB::ComputeDistance(Span<float> a, Span<float> b) const
 {
+    if (a.size() != b.size()) {
+        return std::numeric_limits<float>::infinity();
+    }
+
+    switch (options_.metric) {
+    case DistanceMetric::kL2: {
+        float sum = 0.0f;
+        for (size_t i = 0; i < a.size(); ++i) {
+            float diff = a[i] - b[i];
+            sum += diff * diff;
+        }
+        return std::sqrt(sum);
+    }
+    case DistanceMetric::kCosine: {
+        float dot = 0.0f;
+        float normA = 0.0f;
+        float normB = 0.0f;
+        for (size_t i = 0; i < a.size(); ++i) {
+            dot += a[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
+        }
+        if (normA == 0.0f || normB == 0.0f) {
+            return std::numeric_limits<float>::infinity();
+        }
+        return 1.0f - (dot / (std::sqrt(normA) * std::sqrt(normB)));
+    }
+    default:
+        break;
+    }
+
     float sum = 0.0f;
     for (size_t i = 0; i < a.size(); ++i) {
         float diff = a[i] - b[i];
@@ -176,9 +209,6 @@ Status LSMVecDB::SearchKnn(Span<float> query,
     if (options.k <= 0) {
         return Status::InvalidArgument("k must be positive");
     }
-    if (options.k != 1) {
-        return Status::NotSupported("only k=1 search is supported");
-    }
 
     Status metric_status = EnsureMetricSupported();
     if (!metric_status.ok()) {
@@ -191,22 +221,30 @@ Status LSMVecDB::SearchKnn(Span<float> query,
     }
 
     std::vector<float> query_vec(query.begin(), query.end());
-    node_id_t result = index_->knnSearch(query_vec);
-    if (result == k_invalid_node_id) {
+    std::vector<node_id_t> results =
+        index_->knnSearchK(query_vec, options.k, options.ef_search);
+    if (results.empty()) {
         return Status::NotFound("index is empty");
-    }
-    if (deleted_ids_.count(result) > 0) {
-        return Status::NotFound("nearest neighbor deleted");
-    }
-
-    std::vector<float> stored;
-    Status get_status = Get(result, &stored);
-    if (!get_status.ok()) {
-        return get_status;
     }
 
     out->clear();
-    out->push_back({result, ComputeDistance(query, Span<float>(stored))});
+    out->reserve(results.size());
+    for (node_id_t result : results) {
+        if (deleted_ids_.count(result) > 0) {
+            continue;
+        }
+        std::vector<float> stored;
+        Status get_status = Get(result, &stored);
+        if (!get_status.ok()) {
+            return get_status;
+        }
+        out->push_back({result, ComputeDistance(query, Span<float>(stored))});
+    }
+
+    if (out->empty()) {
+        return Status::NotFound("no available neighbors");
+    }
+
     return Status::OK();
 }
 } // namespace lsm_vec

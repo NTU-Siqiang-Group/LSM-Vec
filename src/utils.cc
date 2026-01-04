@@ -1,4 +1,5 @@
 #include "utils.h"
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 // Function to read vectors from a bvecs file
@@ -250,7 +251,10 @@ void insertFromFile(lsm_vec::LSMVecDB &db, const std::string &filename)
 }
 
 // Function to perform queries from a file and compare results with ground truth
-void queryAndCompareWithGroundTruth(lsm_vec::LSMVecDB &db, const std::string &queryFile, const std::string &groundTruthFile)
+void queryAndCompareWithGroundTruth(lsm_vec::LSMVecDB &db,
+                                    const std::string &queryFile,
+                                    const std::string &groundTruthFile,
+                                    int k)
 {
     auto queries = readFvecsFile(queryFile);
     auto groundTruth = readIvecsFile(groundTruthFile);
@@ -265,7 +269,7 @@ void queryAndCompareWithGroundTruth(lsm_vec::LSMVecDB &db, const std::string &qu
     int totalQueries = static_cast<int>(queries.size());
     double totalQueryTime = 0.0;
     lsm_vec::SearchOptions search_options;
-    search_options.k = 1;
+    search_options.k = k;
 
     for (size_t i = 0; i < queries.size(); ++i)
     {
@@ -289,13 +293,20 @@ void queryAndCompareWithGroundTruth(lsm_vec::LSMVecDB &db, const std::string &qu
             continue;
         }
 
-        int hnswResult = results.front().id;
-        // Get ground truth result
-        int groundTruthResult = groundTruth[i][0]; // Assuming the first entry is the closest
-
-        // Check if the result matches the ground truth
-        if (hnswResult == groundTruthResult)
-        {
+        int max_truth = std::min(static_cast<int>(groundTruth[i].size()), k);
+        bool matched = false;
+        for (const auto& result : results) {
+            for (int idx = 0; idx < max_truth; ++idx) {
+                if (result.id == groundTruth[i][idx]) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (matched) {
+                break;
+            }
+        }
+        if (matched) {
             ++correctMatches;
         }
     }

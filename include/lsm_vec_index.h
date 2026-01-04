@@ -61,7 +61,7 @@ using namespace ROCKSDB_NAMESPACE;
 
     private:
         int randomLevel();
-        float euclideanDistance(const std::vector<float> &vectorA, const std::vector<float> &vectorB) const;
+        float computeDistance(const std::vector<float> &vectorA, const std::vector<float> &vectorB) const;
         void storeVectorWithStats(node_id_t id,
                                   const std::vector<float>& vec,
                                   node_id_t sectionKey);

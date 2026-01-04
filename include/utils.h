@@ -22,7 +22,10 @@ std::vector<std::vector<float>> readFvecsFile(const std::string& filename);
 
 void insertFromFile(lsm_vec::LSMVecDB& db, const std::string& filename);
 
-void queryAndCompareWithGroundTruth(lsm_vec::LSMVecDB& db, const std::string& queryFile, const std::string& groundTruthFile);
+void queryAndCompareWithGroundTruth(lsm_vec::LSMVecDB& db,
+                                    const std::string& queryFile,
+                                    const std::string& groundTruthFile,
+                                    int k);
 
 int getdim(const std::string& filename);
 #endif // HNSW_UTILS_H

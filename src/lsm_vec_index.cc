@@ -140,13 +140,46 @@ using namespace ROCKSDB_NAMESPACE;
         return (int)r;
     }
 
-    // Calculates the Euclidean distance between two points
-    float LSMVec::euclideanDistance(const std::vector<float> &vectorA, const std::vector<float> &vectorB) const
+    float LSMVec::computeDistance(const std::vector<float> &vectorA, const std::vector<float> &vectorB) const
     {
-        float sum = 0.0;
+        if (vectorA.size() != vectorB.size())
+        {
+            throw std::invalid_argument("vector size mismatch");
+        }
+
+        switch (db_options_.metric) {
+        case DistanceMetric::kL2: {
+            float sum = 0.0f;
+            for (size_t i = 0; i < vectorA.size(); ++i)
+            {
+                float diff = vectorA[i] - vectorB[i];
+                sum += diff * diff;
+            }
+            return std::sqrt(sum);
+        }
+        case DistanceMetric::kCosine: {
+            float dot = 0.0f;
+            float normA = 0.0f;
+            float normB = 0.0f;
+            for (size_t i = 0; i < vectorA.size(); ++i) {
+                dot += vectorA[i] * vectorB[i];
+                normA += vectorA[i] * vectorA[i];
+                normB += vectorB[i] * vectorB[i];
+            }
+            if (normA == 0.0f || normB == 0.0f) {
+                return std::numeric_limits<float>::infinity();
+            }
+            return 1.0f - (dot / (std::sqrt(normA) * std::sqrt(normB)));
+        }
+        default:
+            break;
+        }
+
+        float sum = 0.0f;
         for (size_t i = 0; i < vectorA.size(); ++i)
         {
-            sum += (vectorA[i] - vectorB[i]) * (vectorA[i] - vectorB[i]);
+            float diff = vectorA[i] - vectorB[i];
+            sum += diff * diff;
         }
         return std::sqrt(sum);
     }
@@ -508,13 +541,13 @@ using namespace ROCKSDB_NAMESPACE;
                 float dist = 0.0;
                 if (layer > 0)
                 {
-                    dist = euclideanDistance(vector, nodes_[candidateId].point);
+                    dist = computeDistance(vector, nodes_[candidateId].point);
                 }
                 else if (layer == 0)
                 {
                     std::vector<float> candidateVector;
                     readVectorWithStats(candidateId, candidateVector);
-                    dist = euclideanDistance(vector, candidateVector);
+                    dist = computeDistance(vector, candidateVector);
                 }
 
                 topCandidates.emplace(dist, candidateId);
@@ -576,7 +609,7 @@ using namespace ROCKSDB_NAMESPACE;
         for (node_id_t candidateId : candidateIds)
         {
             const auto& candVec = getVector(candidateId);
-            float d = euclideanDistance(vector, candVec);
+            float d = computeDistance(vector, candVec);
             candInfos.push_back(CandidateInfo{candidateId, d});
         }
 
@@ -607,7 +640,7 @@ using namespace ROCKSDB_NAMESPACE;
             {
                 const auto& v1 = getVector(selectedId);
                 const auto& v2 = getVector(candidateId);
-                float currentDist = euclideanDistance(v1, v2);
+                float currentDist = computeDistance(v1, v2);
 
                 if (currentDist < distToQuery)
                 {
@@ -677,7 +710,7 @@ using namespace ROCKSDB_NAMESPACE;
         for (node_id_t candidateId : candidateIds)
         {
             const auto& candVec = getVector(candidateId);
-            float d = euclideanDistance(vector, candVec);
+            float d = computeDistance(vector, candVec);
             candInfos.push_back(CandidateInfo{candidateId, d});
         }
 
@@ -708,7 +741,7 @@ using namespace ROCKSDB_NAMESPACE;
             {
                 const auto& v1 = getVector(selectedId);
                 const auto& v2 = getVector(candidateId);
-                float currentDist = euclideanDistance(v1, v2);
+                float currentDist = computeDistance(v1, v2);
 
                 if (currentDist < distToQuery)
                 {
@@ -753,12 +786,12 @@ using namespace ROCKSDB_NAMESPACE;
         auto getDistance = [&](node_id_t nodeId) -> float {
             if (layer > 0) {
                 // Upper layers: vectors are in-memory
-                return euclideanDistance(queryVector, nodes_.at(nodeId).point);
+                return computeDistance(queryVector, nodes_.at(nodeId).point);
             } else {
                 // Level 0: vectors are on disk
                 std::vector<float> v;
                 readVectorWithStats(nodeId, v);
-                return euclideanDistance(queryVector, v);
+                return computeDistance(queryVector, v);
             }
         };
 
@@ -794,7 +827,7 @@ using namespace ROCKSDB_NAMESPACE;
                 const auto& neighborIds = it->second;
                 for (node_id_t neighborId : neighborIds) {
                     if (visited.insert(neighborId).second) {
-                        float d = euclideanDistance(queryVector, nodes_.at(neighborId).point);
+                        float d = computeDistance(queryVector, nodes_.at(neighborId).point);
                         if (static_cast<int>(nearest.size()) < efSearch || d < nearest.top().first) {
                             candidates.emplace(-d, neighborId);
                             nearest.emplace(d, neighborId);
@@ -816,7 +849,7 @@ using namespace ROCKSDB_NAMESPACE;
                         std::vector<float> neighborVec;
                         readVectorWithStats(neighborId, neighborVec);
 
-                        float d = euclideanDistance(queryVector, neighborVec);
+                        float d = computeDistance(queryVector, neighborVec);
                         if (static_cast<int>(nearest.size()) < efSearch || d < nearest.top().first) {
                             candidates.emplace(-d, neighborId);
                             nearest.emplace(d, neighborId);

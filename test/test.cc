@@ -54,7 +54,7 @@ int main(int argc, char* argv[])
     // }
 
     std::cout << "Querying and comparing with ground truth " << config.query_file_path << std::endl;
-    queryAndCompareWithGroundTruth(*db, config.query_file_path, config.groundtruth_file_path);
+    queryAndCompareWithGroundTruth(*db, config.query_file_path, config.groundtruth_file_path, config.k);
 
     return 0;
 }

@@ -18,6 +18,7 @@ struct Config {
     size_t input_size;
     int random_seed = 12345;
     bool enable_stats = false;
+    int k = 1;
 
     int vector_storage_type = 0; // 0 for basic, 1 for paged
 
@@ -79,6 +80,7 @@ R"(Usage:
        (--data-dir <dir> [--name <prefix>] | --base <fvecs> --query <fvecs> --truth <ivecs>) \
        [--M <int>] [--Mmax <int>] [--Ml <int>] [--efc <float>] \
        [--db-target-size <bytes>] [--out <file>] \
+       [--k <int>] \
        [--stats <0|1>] \
        [--edge-policy <eager|lazy|none>] \
        [-h|--help]
@@ -94,7 +96,8 @@ Notes:
 Short aliases:
   -d --db, -v --vec, -D --data-dir, -n --name,
   -i --base, -q --query, -g --truth,
-  -m --M, -x --Mmax, -l --Ml, -e --efc, -s --db-target-size, -o --out, -p --edge-policy
+  -m --M, -x --Mmax, -l --Ml, -e --efc, -k --k,
+  -s --db-target-size, -o --out, -p --edge-policy
 )";
     }
 
@@ -148,6 +151,7 @@ Short aliases:
                 else if (key == "x") put("Mmax", val);
                 else if (key == "l") put("Ml", val);
                 else if (key == "e") put("efc", val);
+                else if (key == "k") put("k", val);
                 else if (key == "p") put("edge-policy", val);
                 else if (key == "V") put("vec-storage", val);
             }
@@ -168,6 +172,7 @@ Short aliases:
         if (kv.count("Mmax"))               cfg_.Mmax = parseI(kv["Mmax"]);
         if (kv.count("Ml"))                 cfg_.Ml = parseI(kv["Ml"]);
         if (kv.count("efc"))                cfg_.efConstruction = parseF(kv["efc"]);
+        if (kv.count("k"))                  cfg_.k = parseI(kv["k"]);
 
         // Explicit file overrides (take precedence over any derived path)
         if (kv.count("base"))               cfg_.input_file_path = kv["base"];
