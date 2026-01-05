@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 
 namespace lsm_vec
 {

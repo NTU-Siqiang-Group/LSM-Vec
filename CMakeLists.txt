@@ -11,6 +11,7 @@ set(CMAKE_BUILD_TYPE Release)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -Wall -Wextra -O2")
+add_compile_definitions(BOOST_RANDOM_USE_STD_RANDOM ROCKSDB_USE_STD_RANDOM)
 
 set(ASTER_ROCKSDB_ROOT ${CMAKE_SOURCE_DIR}/lib/aster)
 
@@ -109,3 +110,24 @@ target_link_libraries(lsm_vec PRIVATE lsmvec_shared)
 set_target_properties(lsm_vec PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
+
+option(LSMVEC_BUILD_PYTHON "Build Python bindings" OFF)
+
+if(LSMVEC_BUILD_PYTHON)
+    include(FetchContent)
+    FetchContent_Declare(
+        pybind11
+        GIT_REPOSITORY https://github.com/pybind/pybind11.git
+        GIT_TAG v2.13.6
+    )
+    FetchContent_MakeAvailable(pybind11)
+
+    pybind11_add_module(lsm_vec_python MODULE python/lsm_vec_pybind.cc)
+    target_include_directories(lsm_vec_python PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(lsm_vec_python PRIVATE lsmvec_shared)
+    set_target_properties(lsm_vec_python PROPERTIES
+        OUTPUT_NAME lsm_vec
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/python
+    )
+    install(TARGETS lsm_vec_python LIBRARY DESTINATION .)
+endif()

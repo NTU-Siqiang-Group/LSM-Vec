@@ -156,6 +156,50 @@ Example:
 * Page-level caching with FIFO eviction (`paged_max_cached_pages` inside `Config.h`)
 * Supports optional page prefetch by IDs
 
+## Python plugin (SDK/API)
+
+LSM-Vec includes an optional pybind11-based Python module. Enable it by passing
+`-DLSMVEC_BUILD_PYTHON=ON` when configuring CMake. The resulting extension is
+named `lsm_vec` and is written to `build/python/`.
+
+```bash
+cmake -S . -B build -DLSMVEC_BUILD_PYTHON=ON
+cmake --build build
+```
+
+Example usage:
+
+```python
+import lsm_vec
+
+opts = lsm_vec.LSMVecDBOptions()
+opts.dim = 128
+opts.vector_file_path = "./run/db/vector.log"
+
+db = lsm_vec.LSMVecDB.open("./run/db", opts)
+db.insert(0, [0.1] * 128)
+
+search_opts = lsm_vec.SearchOptions()
+search_opts.k = 5
+results = db.search_knn([0.1] * 128, search_opts)
+print([(r.id, r.distance) for r in results])
+```
+
+### pip install .
+
+You can also build and install the module via `pip` (uses `pyproject.toml` and
+scikit-build-core under the hood):
+
+```bash
+pip install .
+```
+
+If you want an editable install while iterating locally:
+
+```bash
+pip install -e .
+```
+
 ## Troubleshooting
 
 #### 1) Link errors about RocksGraph methods (e.g. `undefined reference to rocksdb::RocksGraph::AddEdge`)
