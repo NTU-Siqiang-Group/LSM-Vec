@@ -1,3 +1,4 @@
 [submodule "lib/aster"]
 	path = lib/aster
 	url = https://github.com/NTU-Siqiang-Group/Aster.git
+	branch = main
