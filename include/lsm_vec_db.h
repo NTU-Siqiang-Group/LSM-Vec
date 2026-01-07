@@ -84,6 +84,8 @@ public:
                      const SearchOptions& options,
                      std::vector<SearchResult>* out);
 
+    void printStatistics() const;
+
 private:
     LSMVecDB(const LSMVecDBOptions& options,
              std::unique_ptr<class LSMVec> index,

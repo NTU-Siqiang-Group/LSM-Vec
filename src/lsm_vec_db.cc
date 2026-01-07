@@ -247,4 +247,9 @@ Status LSMVecDB::SearchKnn(Span<float> query,
 
     return Status::OK();
 }
+
+void LSMVecDB::printStatistics() const
+{
+    index_->printStatistics();
+}
 } // namespace lsm_vec

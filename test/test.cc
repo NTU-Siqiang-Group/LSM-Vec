@@ -44,7 +44,6 @@ int main(int argc, char* argv[])
 
     std::cout << "Inserting nodes from " << config.input_file_path << std::endl;
     insertFromFile(*db, config.input_file_path);
-
     // std::vector<float> first_vec;
     // auto get_status = db->Get(0, &first_vec);
     // if (get_status.ok()) {
@@ -55,6 +54,10 @@ int main(int argc, char* argv[])
 
     std::cout << "Querying and comparing with ground truth " << config.query_file_path << std::endl;
     queryAndCompareWithGroundTruth(*db, config.query_file_path, config.groundtruth_file_path, config.k);
-
+    if(options.enable_stats){
+        std::cout << "---------------------------------" << std::endl;
+        db->printStatistics();
+        std::cout << "---------------------------------" << std::endl;
+    }
     return 0;
 }
