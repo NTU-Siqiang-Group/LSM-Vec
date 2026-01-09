@@ -370,6 +370,35 @@ private:
         }
     }
 
+    void expandCapacity(size_t minCapacity) {
+        if (minCapacity <= totalVectors_) {
+            return;
+        }
+
+        size_t target = totalVectors_ == 0 ? minCapacity : totalVectors_;
+        while (target < minCapacity) {
+            target *= 2;
+        }
+
+        deleteStream_.clear();
+        deleteStream_.seekp(0, std::ios::end);
+        size_t currentSize = static_cast<size_t>(deleteStream_.tellp());
+        if (currentSize < target) {
+            deleteStream_.seekp(static_cast<std::streamoff>(target - 1), std::ios::beg);
+            char zero = 0;
+            deleteStream_.write(&zero, 1);
+            deleteStream_.flush();
+            if (!deleteStream_.good()) {
+                throw std::runtime_error("Failed to expand delete marker file.");
+            }
+        }
+
+        idToPage_.resize(target, -1);
+        idToSlotInPage_.resize(target, 0);
+        deletedFlags_.resize(target, 0);
+        totalVectors_ = target;
+    }
+
     // Ensure that the file is large enough to contain pageId (0-based)
     void ensurePageAllocated(size_t pageId) {
         size_t requiredSize = (pageId + 1) * kPageSize;
@@ -579,7 +608,7 @@ public:
                            node_id_t sectionKey) override
     {
         if (static_cast<size_t>(id) >= totalVectors_) {
-            throw std::out_of_range("Vector ID out of range.");
+            expandCapacity(static_cast<size_t>(id) + 1);
         }
         if (vec.size() != dim_) {
             throw std::runtime_error("Vector size mismatch.");
