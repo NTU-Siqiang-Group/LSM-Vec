@@ -29,7 +29,7 @@ struct Config {
     // If --vec is omitted, this defaults to db_path
     std::string vector_file_path;
     size_t vec_file_capacity = 100000;
-    size_t paged_max_cached_pages = 256;
+    size_t paged_max_cached_pages = 512;
 
     // New: single data directory and optional shared name/prefix
     // If only --data-dir is provided (no --name), filenames become:
@@ -79,6 +79,7 @@ R"(Usage:
   )" << prog << R"( --db <path> [--vec <path>] \
        (--data-dir <dir> [--name <prefix>] | --base <fvecs> --query <fvecs> --truth <ivecs>) \
        [--M <int>] [--Mmax <int>] [--Ml <int>] [--efc <float>] \
+       [--paged-cache-pages <count>] \
        [--db-target-size <bytes>] [--out <file>] \
        [--k <int>] \
        [--stats <0|1>] \
@@ -173,6 +174,7 @@ Short aliases:
         if (kv.count("Ml"))                 cfg_.Ml = parseI(kv["Ml"]);
         if (kv.count("efc"))                cfg_.efConstruction = parseF(kv["efc"]);
         if (kv.count("k"))                  cfg_.k = parseI(kv["k"]);
+        if (kv.count("paged-cache-pages"))  cfg_.paged_max_cached_pages = parseU64(kv["paged-cache-pages"]);
 
         // Explicit file overrides (take precedence over any derived path)
         if (kv.count("base"))               cfg_.input_file_path = kv["base"];

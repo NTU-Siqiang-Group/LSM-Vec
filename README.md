@@ -140,6 +140,7 @@ Example:
 * `--vec-storage <int>`:
   * `0` = BasicVectorStorage (default)
   * `1` = PagedVectorStorage (4KB pages + FIFO cache)
+* `--paged-cache-pages <count>`: page cache capacity in pages (default: 256)
 * `--out <path>`: output file (default: `output.txt`)
 
 ## Notes on vector storage

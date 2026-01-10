@@ -1119,6 +1119,10 @@ using namespace ROCKSDB_NAMESPACE;
 
     void LSMVec::printStatistics() const
     {
+        auto cache_stats = vector_storage_->getPageCacheStats();
+        stats.page_cache_hits = cache_stats.hits;
+        stats.page_cache_misses = cache_stats.misses;
+
         std::ostringstream oss;
         stats.print(oss);
         LOG(INFO) << oss.str();

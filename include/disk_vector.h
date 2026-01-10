@@ -20,6 +20,11 @@ static constexpr node_id_t k_invalid_node_id =
 
 class IVectorStorage {
 public:
+    struct PageCacheStats {
+        std::size_t hits = 0;
+        std::size_t misses = 0;
+    };
+
     virtual ~IVectorStorage() = default;
 
     // Dimension of each vector (number of floats)
@@ -54,6 +59,9 @@ public:
 
     // Optional prefetch API. Default is no-op.
     virtual void prefetchByIds(const std::vector<node_id_t>& /*ids*/) {}
+
+    // Optional page cache stats. Default returns zeros.
+    virtual PageCacheStats getPageCacheStats() const { return {}; }
 };
 
 class BasicVectorStorage : public IVectorStorage {
@@ -298,6 +306,8 @@ private:
 
     // Page cache (FIFO) in units of full pages (4KB each)
     size_t maxCachedPages_;
+    size_t pageCacheHits_ = 0;
+    size_t pageCacheMisses_ = 0;
 
     struct PageBuf {
         std::vector<char> data; // always kPageSize bytes
@@ -662,8 +672,12 @@ public:
         size_t pageId = static_cast<size_t>(page);
 
         // 1) Try page cache
-        if (tryReadFromCache(pageId, slot, vec)) {
-            return;
+        if (maxCachedPages_ > 0) {
+            if (tryReadFromCache(pageId, slot, vec)) {
+                ++pageCacheHits_;
+                return;
+            }
+            ++pageCacheMisses_;
         }
 
         // 2) If not cached, optionally cache the page then try again
@@ -736,6 +750,10 @@ public:
                 loadPageToCache(pageId);
             }
         }
+    }
+
+    PageCacheStats getPageCacheStats() const override {
+        return PageCacheStats{pageCacheHits_, pageCacheMisses_};
     }
 };
 }

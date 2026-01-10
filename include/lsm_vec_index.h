@@ -29,7 +29,7 @@ using namespace ROCKSDB_NAMESPACE;
             std::unordered_map<int, std::vector<node_id_t>> neighbors; // Layer -> neighbors
         };
 
-        HNSWStats stats;
+        mutable HNSWStats stats;
 
         bool use_heuristic_neighbor_selection_ = true;
 
