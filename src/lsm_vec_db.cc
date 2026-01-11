@@ -13,12 +13,15 @@ namespace lsm_vec
 namespace {
 constexpr char kDefaultVectorFileName[] = "vector.log";
 constexpr char kDefaultLogFileName[] = "lsm_vec_db.log";
+constexpr char kMetadataFileName[] = "lsm_vec_db.meta";
 } // namespace
 
-LSMVecDB::LSMVecDB(const LSMVecDBOptions& options,
+LSMVecDB::LSMVecDB(const std::string& db_path,
+                   const LSMVecDBOptions& options,
                    std::unique_ptr<LSMVec> index,
                    std::unique_ptr<std::ostream> log_stream)
-    : options_(options),
+    : db_path_(db_path),
+      options_(options),
       log_stream_(std::move(log_stream)),
       index_(std::move(index))
 {
@@ -56,7 +59,19 @@ Status LSMVecDB::Open(const std::string& path,
     auto index = std::make_unique<LSMVec>(path, normalized_opts, *log_stream);
 
     *db = std::unique_ptr<LSMVecDB>(
-        new LSMVecDB(normalized_opts, std::move(index), std::move(log_stream)));
+        new LSMVecDB(path, normalized_opts, std::move(index), std::move(log_stream)));
+
+    if (!normalized_opts.reinit) {
+        std::string metadata_path = path + "/" + kMetadataFileName;
+        std::ifstream metadata_stream(metadata_path, std::ios::binary);
+        if (metadata_stream.is_open()) {
+            Status metadata_status = (*db)->index_->DeserializeMetadata(metadata_stream);
+            if (!metadata_status.ok()) {
+                return metadata_status;
+            }
+            (*db)->deleted_ids_ = (*db)->index_->deletedIds();
+        }
+    }
     return Status::OK();
 }
 
@@ -251,5 +266,33 @@ Status LSMVecDB::SearchKnn(Span<float> query,
 void LSMVecDB::printStatistics() const
 {
     index_->printStatistics();
+}
+
+Status LSMVecDB::Close()
+{
+    if (!index_) {
+        return Status::InvalidArgument("database not initialized");
+    }
+
+    std::string metadata_path = db_path_ + "/" + kMetadataFileName;
+    std::ofstream metadata_stream(metadata_path, std::ios::binary | std::ios::trunc);
+    if (!metadata_stream.is_open()) {
+        return Status::IOError("failed to open metadata file for writing");
+    }
+
+    index_->setDeletedIds(deleted_ids_);
+    Status metadata_status = index_->SerializeMetadata(metadata_stream);
+    if (!metadata_status.ok()) {
+        return metadata_status;
+    }
+    metadata_stream.flush();
+    if (!metadata_stream.good()) {
+        return Status::IOError("failed to flush metadata file");
+    }
+    if (log_stream_) {
+        log_stream_->flush();
+    }
+
+    return Status::OK();
 }
 } // namespace lsm_vec

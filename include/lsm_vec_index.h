@@ -41,6 +41,10 @@ using namespace ROCKSDB_NAMESPACE;
                const LSMVecDBOptions& options,
                std::ostream &outFile);
 
+        Status SerializeMetadata(std::ostream& out) const;
+        Status DeserializeMetadata(std::istream& in);
+        const std::unordered_set<node_id_t>& deletedIds() const { return deleted_ids_; }
+        void setDeletedIds(const std::unordered_set<node_id_t>& ids) { deleted_ids_ = ids; }
 
         void insertNode(node_id_t nodeId, const std::vector<float> &vector);
         node_id_t knnSearch(const std::vector<float> &queryVector);
@@ -53,6 +57,7 @@ using namespace ROCKSDB_NAMESPACE;
         void printIndexStatus() const;
         void printStatistics() const;
         void printState() const;
+        void close();
 
         std::string vector_file_path_;
         int vector_dim_ = 0;

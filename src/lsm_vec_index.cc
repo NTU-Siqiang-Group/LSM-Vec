@@ -107,7 +107,7 @@ using namespace ROCKSDB_NAMESPACE;
             options_,
             EDGE_UPDATE_EAGER,
             ENCODING_TYPE_NONE,
-            true
+            db_options_.reinit
         );
 
         if (db_options_.vector_storage_type == 1) {
@@ -126,6 +126,213 @@ using namespace ROCKSDB_NAMESPACE;
                 db_options_.vec_file_capacity
             );
         }
+    }
+
+    namespace {
+    constexpr char kMetadataMagic[] = "LSMVMETA";
+    constexpr uint32_t kMetadataVersion = 1;
+
+    template <typename T>
+    bool WriteValue(std::ostream& out, const T& value)
+    {
+        out.write(reinterpret_cast<const char*>(&value), sizeof(T));
+        return static_cast<bool>(out);
+    }
+
+    template <typename T>
+    bool ReadValue(std::istream& in, T* value)
+    {
+        in.read(reinterpret_cast<char*>(value), sizeof(T));
+        return static_cast<bool>(in);
+    }
+    } // namespace
+
+    Status LSMVec::SerializeMetadata(std::ostream& out) const
+    {
+        if (!out) {
+            return Status::IOError("metadata output stream is not ready");
+        }
+
+        if (!out.write(kMetadataMagic, sizeof(kMetadataMagic) - 1)) {
+            return Status::IOError("failed to write metadata magic");
+        }
+        if (!WriteValue(out, kMetadataVersion)) {
+            return Status::IOError("failed to write metadata version");
+        }
+
+        uint64_t entryPoint = static_cast<uint64_t>(entry_point_);
+        int32_t maxLayer = static_cast<int32_t>(max_layer_);
+        uint64_t nodeCount = static_cast<uint64_t>(nodes_.size());
+        uint64_t deletedCount = static_cast<uint64_t>(deleted_ids_.size());
+
+        if (!WriteValue(out, entryPoint) ||
+            !WriteValue(out, maxLayer) ||
+            !WriteValue(out, nodeCount) ||
+            !WriteValue(out, deletedCount)) {
+            return Status::IOError("failed to write metadata header");
+        }
+
+        for (const auto& kv : nodes_) {
+            node_id_t nodeId = kv.first;
+            const Node& node = kv.second;
+            uint64_t pointSize = static_cast<uint64_t>(node.point.size());
+            uint64_t neighborLayers = static_cast<uint64_t>(node.neighbors.size());
+
+            if (!WriteValue(out, nodeId) ||
+                !WriteValue(out, pointSize)) {
+                return Status::IOError("failed to write node metadata");
+            }
+            if (!node.point.empty()) {
+                out.write(reinterpret_cast<const char*>(node.point.data()),
+                          static_cast<std::streamsize>(node.point.size() * sizeof(float)));
+                if (!out) {
+                    return Status::IOError("failed to write node vector");
+                }
+            }
+
+            if (!WriteValue(out, neighborLayers)) {
+                return Status::IOError("failed to write neighbor layer count");
+            }
+            for (const auto& layerEntry : node.neighbors) {
+                int32_t layer = static_cast<int32_t>(layerEntry.first);
+                const auto& neighbors = layerEntry.second;
+                uint64_t neighborCount = static_cast<uint64_t>(neighbors.size());
+                if (!WriteValue(out, layer) || !WriteValue(out, neighborCount)) {
+                    return Status::IOError("failed to write neighbors metadata");
+                }
+                for (node_id_t neighbor : neighbors) {
+                    if (!WriteValue(out, neighbor)) {
+                        return Status::IOError("failed to write neighbor id");
+                    }
+                }
+            }
+        }
+
+        for (node_id_t id : deleted_ids_) {
+            if (!WriteValue(out, id)) {
+                return Status::IOError("failed to write deleted id");
+            }
+        }
+
+        int32_t storageType = db_options_.vector_storage_type;
+        if (!WriteValue(out, storageType)) {
+            return Status::IOError("failed to write vector storage type");
+        }
+        if (storageType == 1) {
+            auto* paged = dynamic_cast<PagedVectorStorage*>(vector_storage_.get());
+            if (!paged) {
+                return Status::IOError("paged vector storage not available");
+            }
+            if (!paged->serializeMetadata(out)) {
+                return Status::IOError("failed to write paged storage metadata");
+            }
+        }
+
+        return Status::OK();
+    }
+
+    Status LSMVec::DeserializeMetadata(std::istream& in)
+    {
+        if (!in) {
+            return Status::IOError("metadata input stream is not ready");
+        }
+
+        char magic[sizeof(kMetadataMagic) - 1] = {};
+        in.read(magic, sizeof(magic));
+        if (!in || std::string(magic, sizeof(magic)) != kMetadataMagic) {
+            return Status::IOError("invalid metadata magic");
+        }
+
+        uint32_t version = 0;
+        if (!ReadValue(in, &version) || version != kMetadataVersion) {
+            return Status::IOError("unsupported metadata version");
+        }
+
+        uint64_t entryPoint = 0;
+        int32_t maxLayer = 0;
+        uint64_t nodeCount = 0;
+        uint64_t deletedCount = 0;
+        if (!ReadValue(in, &entryPoint) ||
+            !ReadValue(in, &maxLayer) ||
+            !ReadValue(in, &nodeCount) ||
+            !ReadValue(in, &deletedCount)) {
+            return Status::IOError("failed to read metadata header");
+        }
+
+        nodes_.clear();
+        nodes_.reserve(static_cast<size_t>(nodeCount));
+        for (uint64_t i = 0; i < nodeCount; ++i) {
+            node_id_t nodeId = 0;
+            uint64_t pointSize = 0;
+            if (!ReadValue(in, &nodeId) || !ReadValue(in, &pointSize)) {
+                return Status::IOError("failed to read node metadata");
+            }
+            if (pointSize != static_cast<uint64_t>(vector_dim_)) {
+                return Status::InvalidArgument("node vector dimension mismatch");
+            }
+            std::vector<float> point(static_cast<size_t>(pointSize));
+            if (!point.empty()) {
+                in.read(reinterpret_cast<char*>(point.data()),
+                        static_cast<std::streamsize>(point.size() * sizeof(float)));
+                if (!in) {
+                    return Status::IOError("failed to read node vector");
+                }
+            }
+
+            uint64_t neighborLayers = 0;
+            if (!ReadValue(in, &neighborLayers)) {
+                return Status::IOError("failed to read neighbor layer count");
+            }
+            Node node{nodeId, std::move(point), {}};
+            for (uint64_t j = 0; j < neighborLayers; ++j) {
+                int32_t layer = 0;
+                uint64_t neighborCount = 0;
+                if (!ReadValue(in, &layer) || !ReadValue(in, &neighborCount)) {
+                    return Status::IOError("failed to read neighbor metadata");
+                }
+                std::vector<node_id_t> neighbors;
+                neighbors.reserve(static_cast<size_t>(neighborCount));
+                for (uint64_t k = 0; k < neighborCount; ++k) {
+                    node_id_t neighbor = 0;
+                    if (!ReadValue(in, &neighbor)) {
+                        return Status::IOError("failed to read neighbor id");
+                    }
+                    neighbors.push_back(neighbor);
+                }
+                node.neighbors.emplace(layer, std::move(neighbors));
+            }
+            nodes_.emplace(nodeId, std::move(node));
+        }
+
+        deleted_ids_.clear();
+        for (uint64_t i = 0; i < deletedCount; ++i) {
+            node_id_t id = 0;
+            if (!ReadValue(in, &id)) {
+                return Status::IOError("failed to read deleted ids");
+            }
+            deleted_ids_.insert(id);
+        }
+
+        int32_t storageType = 0;
+        if (!ReadValue(in, &storageType)) {
+            return Status::IOError("failed to read vector storage type");
+        }
+        if (storageType != db_options_.vector_storage_type) {
+            return Status::InvalidArgument("vector storage type mismatch");
+        }
+        if (storageType == 1) {
+            auto* paged = dynamic_cast<PagedVectorStorage*>(vector_storage_.get());
+            if (!paged) {
+                return Status::IOError("paged vector storage not available");
+            }
+            if (!paged->deserializeMetadata(in)) {
+                return Status::IOError("failed to load paged storage metadata");
+            }
+        }
+
+        entry_point_ = static_cast<node_id_t>(entryPoint);
+        max_layer_ = maxLayer;
+        return Status::OK();
     }
 
 
@@ -1126,6 +1333,11 @@ using namespace ROCKSDB_NAMESPACE;
         std::ostringstream oss;
         stats.print(oss);
         LOG(INFO) << oss.str();
+    }
+
+    void LSMVec::close()
+    {
+        db_.reset();
     }
 
     // void LSMVec::printStatistics() const

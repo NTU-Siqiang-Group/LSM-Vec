@@ -19,6 +19,7 @@ struct Config {
     int random_seed = 12345;
     bool enable_stats = false;
     int k = 1;
+    bool reinit = true;
 
     int vector_storage_type = 0; // 0 for basic, 1 for paged
 
@@ -61,7 +62,8 @@ struct Config {
                               size_t paged_cache_pages_value,
                               int vector_storage_type_value,
                               uint64_t db_target_size_value,
-                              int random_seed_value) {
+                              int random_seed_value,
+                              bool reinit_value = false) {
         Config cfg_;
         cfg_.db_path = db_path_value;
         cfg_.vector_file_path = vector_file_path_value;
@@ -70,6 +72,7 @@ struct Config {
         cfg_.vector_storage_type = vector_storage_type_value;
         cfg_.db_target_size = db_target_size_value;
         cfg_.random_seed = random_seed_value;
+        cfg_.reinit = reinit_value;
         return cfg_;
     }
 
@@ -81,6 +84,7 @@ R"(Usage:
        [--M <int>] [--Mmax <int>] [--Ml <int>] [--efc <float>] \
        [--paged-cache-pages <count>] \
        [--db-target-size <bytes>] [--out <file>] \
+       [--reinit <0|1>] \
        [--k <int>] \
        [--stats <0|1>] \
        [--edge-policy <eager|lazy|none>] \
@@ -114,6 +118,9 @@ Short aliases:
                 return;
             }
             if (k == "stats") {
+                kv[k] = "1";
+            }
+            if (k == "reinit") {
                 kv[k] = "1";
             }
         };
@@ -168,6 +175,7 @@ Short aliases:
         if (kv.count("out"))                cfg_.output_path = kv["out"];
         if (kv.count("edge-policy"))        cfg_.edge_update_policy = kv["edge-policy"];
         if (kv.count("stats"))              cfg_.enable_stats = (kv["stats"] != "0");
+        if (kv.count("reinit"))             cfg_.reinit = (kv["reinit"] != "0");
 
         if (kv.count("M"))                  cfg_.M = parseI(kv["M"]);
         if (kv.count("Mmax"))               cfg_.Mmax = parseI(kv["Mmax"]);
