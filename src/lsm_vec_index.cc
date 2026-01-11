@@ -1,5 +1,6 @@
 #include "lsm_vec_index.h"
 #include "disk_vector.h"
+#include "distance.h"
 #include <algorithm>
 #include <cmath>
 #include <exception>
@@ -244,7 +245,7 @@ using namespace ROCKSDB_NAMESPACE;
         }
 
         uint32_t version = 0;
-        if (!ReadValue(in, &version) || version != kMetadataVersion) {
+        if (!ReadValue(in, &version) || version < 1 || version > kMetadataVersion) {
             return Status::IOError("unsupported metadata version");
         }
 
@@ -347,48 +348,19 @@ using namespace ROCKSDB_NAMESPACE;
         return (int)r;
     }
 
-    float LSMVec::computeDistance(const std::vector<float> &vectorA, const std::vector<float> &vectorB) const
+    float LSMVec::computeDistance(Span<const float> vectorA,
+                                  Span<const float> vectorB) const
     {
         if (vectorA.size() != vectorB.size())
         {
             throw std::invalid_argument("vector size mismatch");
         }
 
-        switch (db_options_.metric) {
-        case DistanceMetric::kL2: {
-            float sum = 0.0f;
-            for (size_t i = 0; i < vectorA.size(); ++i)
-            {
-                float diff = vectorA[i] - vectorB[i];
-                sum += diff * diff;
-            }
-            return std::sqrt(sum);
-        }
-        case DistanceMetric::kCosine: {
-            float dot = 0.0f;
-            float normA = 0.0f;
-            float normB = 0.0f;
-            for (size_t i = 0; i < vectorA.size(); ++i) {
-                dot += vectorA[i] * vectorB[i];
-                normA += vectorA[i] * vectorA[i];
-                normB += vectorB[i] * vectorB[i];
-            }
-            if (normA == 0.0f || normB == 0.0f) {
-                return std::numeric_limits<float>::infinity();
-            }
-            return 1.0f - (dot / (std::sqrt(normA) * std::sqrt(normB)));
-        }
-        default:
-            break;
-        }
-
-        float sum = 0.0f;
-        for (size_t i = 0; i < vectorA.size(); ++i)
-        {
-            float diff = vectorA[i] - vectorB[i];
-            sum += diff * diff;
-        }
-        return std::sqrt(sum);
+        return distance::ComputeDistance(
+            db_options_.metric,
+            vectorA.data(),
+            vectorB.data(),
+            vectorA.size());
     }
 
     void LSMVec::storeVectorWithStats(node_id_t id,
@@ -462,13 +434,23 @@ using namespace ROCKSDB_NAMESPACE;
 
         node_id_t currentEntryPoint = entry_point_;
 
+        auto extractIds = [](const std::vector<SearchResult>& results) {
+            std::vector<node_id_t> ids;
+            ids.reserve(results.size());
+            for (const auto& result : results) {
+                ids.push_back(result.id);
+            }
+            return ids;
+        };
+
         // ----- Search down from top layer to (highestLayer+1) to choose entry -----
         for (int l = max_layer_; l > highestLayer; --l)
         {
-            std::vector<node_id_t> closest = searchLayer(vector, currentEntryPoint, 1, l);
+            std::vector<SearchResult> closest =
+                searchLayer(vector, currentEntryPoint, 1, l);
             if (!closest.empty())
             {
-                currentEntryPoint = closest[0];
+                currentEntryPoint = closest[0].id;
             }
         }
 
@@ -479,10 +461,11 @@ using namespace ROCKSDB_NAMESPACE;
         // ----- From min(max_layer_, highestLayer) ... down to 0 -----
         for (int l = std::min(max_layer_, highestLayer); l >= 0; --l)
         {
-            std::vector<node_id_t> neighbors =
+            std::vector<SearchResult> neighbors =
                 searchLayer(vector, currentEntryPoint, ef_construction_, l);
+            std::vector<node_id_t> neighborIds = extractIds(neighbors);
             std::vector<node_id_t> selectedNeighbors = 
-                selectNeighbors(vector, neighbors, m_, l);
+                selectNeighbors(vector, neighborIds, m_, l);
                 
             // std::vector<node_id_t> selectedNeighbors;
             // if (l > 0)
@@ -494,7 +477,7 @@ using namespace ROCKSDB_NAMESPACE;
             if (l == 1)
             {
                 if (!neighbors.empty())
-                    sectionKey = neighbors[0];
+                    sectionKey = neighbors[0].id;
                 else
                     sectionKey = currentEntryPoint;
             }
@@ -567,7 +550,7 @@ using namespace ROCKSDB_NAMESPACE;
 
             if (!neighbors.empty())
             {
-                currentEntryPoint = neighbors[0];
+                currentEntryPoint = neighbors[0].id;
             }
         }
 
@@ -657,7 +640,7 @@ using namespace ROCKSDB_NAMESPACE;
         return Status::OK();
     }
 
-    std::vector<node_id_t> LSMVec::knnSearchK(const std::vector<float>& query, int k, int ef_search)
+    std::vector<SearchResult> LSMVec::knnSearchK(const std::vector<float>& query, int k, int ef_search)
     {
         if (entry_point_ == k_invalid_node_id || k <= 0) {
             return {};
@@ -666,25 +649,27 @@ using namespace ROCKSDB_NAMESPACE;
         auto search_timer = stats.startTimer();
         node_id_t currentEntryPoint = entry_point_;
         for (int l = max_layer_; l >= 1; --l) {
-            std::vector<node_id_t> nearest = searchLayer(query, currentEntryPoint, ef_search, l);
+            std::vector<SearchResult> nearest =
+                searchLayer(query, currentEntryPoint, ef_search, l);
             if (!nearest.empty()) {
-                currentEntryPoint = nearest[0];
+                currentEntryPoint = nearest[0].id;
             }
         }
 
         int ef = std::max(ef_search, k);
-        std::vector<node_id_t> neighbors = searchLayer(query, currentEntryPoint, ef, 0);
+        std::vector<SearchResult> neighbors =
+            searchLayer(query, currentEntryPoint, ef, 0);
         if (neighbors.empty()) {
             return neighbors;
         }
 
-        std::vector<node_id_t> filtered;
+        std::vector<SearchResult> filtered;
         filtered.reserve(static_cast<size_t>(k));
-        for (node_id_t id : neighbors) {
-            if (deleted_ids_.count(id) > 0) {
+        for (const auto& result : neighbors) {
+            if (deleted_ids_.count(result.id) > 0) {
                 continue;
             }
-            filtered.push_back(id);
+            filtered.push_back(result);
             if (static_cast<int>(filtered.size()) >= k) {
                 break;
             }
@@ -748,13 +733,16 @@ using namespace ROCKSDB_NAMESPACE;
                 float dist = 0.0;
                 if (layer > 0)
                 {
-                    dist = computeDistance(vector, nodes_[candidateId].point);
+                    const auto& candidateVec = nodes_[candidateId].point;
+                    dist = computeDistance(Span<const float>(vector),
+                                           Span<const float>(candidateVec));
                 }
                 else if (layer == 0)
                 {
                     std::vector<float> candidateVector;
                     readVectorWithStats(candidateId, candidateVector);
-                    dist = computeDistance(vector, candidateVector);
+                    dist = computeDistance(Span<const float>(vector),
+                                           Span<const float>(candidateVector));
                 }
 
                 topCandidates.emplace(dist, candidateId);
@@ -816,7 +804,8 @@ using namespace ROCKSDB_NAMESPACE;
         for (node_id_t candidateId : candidateIds)
         {
             const auto& candVec = getVector(candidateId);
-            float d = computeDistance(vector, candVec);
+            float d = computeDistance(Span<const float>(vector),
+                                      Span<const float>(candVec));
             candInfos.push_back(CandidateInfo{candidateId, d});
         }
 
@@ -847,7 +836,8 @@ using namespace ROCKSDB_NAMESPACE;
             {
                 const auto& v1 = getVector(selectedId);
                 const auto& v2 = getVector(candidateId);
-                float currentDist = computeDistance(v1, v2);
+                float currentDist = computeDistance(Span<const float>(v1),
+                                                    Span<const float>(v2));
 
                 if (currentDist < distToQuery)
                 {
@@ -917,7 +907,8 @@ using namespace ROCKSDB_NAMESPACE;
         for (node_id_t candidateId : candidateIds)
         {
             const auto& candVec = getVector(candidateId);
-            float d = computeDistance(vector, candVec);
+            float d = computeDistance(Span<const float>(vector),
+                                      Span<const float>(candVec));
             candInfos.push_back(CandidateInfo{candidateId, d});
         }
 
@@ -948,7 +939,8 @@ using namespace ROCKSDB_NAMESPACE;
             {
                 const auto& v1 = getVector(selectedId);
                 const auto& v2 = getVector(candidateId);
-                float currentDist = computeDistance(v1, v2);
+                float currentDist = computeDistance(Span<const float>(v1),
+                                                    Span<const float>(v2));
 
                 if (currentDist < distToQuery)
                 {
@@ -966,10 +958,10 @@ using namespace ROCKSDB_NAMESPACE;
         return selected;
     }
 
-    std::vector<node_id_t> LSMVec::searchLayer(const std::vector<float>& queryVector,
-                                             node_id_t entryPointId,
-                                             int efSearch,
-                                             int layer)
+    std::vector<SearchResult> LSMVec::searchLayer(const std::vector<float>& queryVector,
+                                                  node_id_t entryPointId,
+                                                  int efSearch,
+                                                  int layer)
     {
         if (layer < 0) {
             LOG(ERR) << "Invalid layer for search";
@@ -993,12 +985,15 @@ using namespace ROCKSDB_NAMESPACE;
         auto getDistance = [&](node_id_t nodeId) -> float {
             if (layer > 0) {
                 // Upper layers: vectors are in-memory
-                return computeDistance(queryVector, nodes_.at(nodeId).point);
+                const auto& point = nodes_.at(nodeId).point;
+                return computeDistance(Span<const float>(queryVector),
+                                       Span<const float>(point));
             } else {
                 // Level 0: vectors are on disk
                 std::vector<float> v;
                 readVectorWithStats(nodeId, v);
-                return computeDistance(queryVector, v);
+                return computeDistance(Span<const float>(queryVector),
+                                       Span<const float>(v));
             }
         };
 
@@ -1034,7 +1029,9 @@ using namespace ROCKSDB_NAMESPACE;
                 const auto& neighborIds = it->second;
                 for (node_id_t neighborId : neighborIds) {
                     if (visited.insert(neighborId).second) {
-                        float d = computeDistance(queryVector, nodes_.at(neighborId).point);
+                        const auto& point = nodes_.at(neighborId).point;
+                        float d = computeDistance(Span<const float>(queryVector),
+                                                  Span<const float>(point));
                         if (static_cast<int>(nearest.size()) < efSearch || d < nearest.top().first) {
                             candidates.emplace(-d, neighborId);
                             nearest.emplace(d, neighborId);
@@ -1055,8 +1052,8 @@ using namespace ROCKSDB_NAMESPACE;
                     if (visited.insert(neighborId).second) {
                         std::vector<float> neighborVec;
                         readVectorWithStats(neighborId, neighborVec);
-
-                        float d = computeDistance(queryVector, neighborVec);
+                        float d = computeDistance(Span<const float>(queryVector),
+                                                  Span<const float>(neighborVec));
                         if (static_cast<int>(nearest.size()) < efSearch || d < nearest.top().first) {
                             candidates.emplace(-d, neighborId);
                             nearest.emplace(d, neighborId);
@@ -1081,10 +1078,10 @@ using namespace ROCKSDB_NAMESPACE;
         std::sort(temp.begin(), temp.end(),
                 [](const auto& a, const auto& b) { return a.first < b.first; });
 
-        std::vector<node_id_t> result;
+        std::vector<SearchResult> result;
         result.reserve(temp.size());
         for (const auto& p : temp) {
-            result.push_back(p.second);
+            result.push_back({p.second, p.first});
         }
         return result;
     }
@@ -1252,7 +1249,7 @@ using namespace ROCKSDB_NAMESPACE;
     {
         auto search_timer = stats.startTimer();
         // W ← ∅ set for the current nearest elements
-        std::vector<node_id_t> nearestNeighbors; // W: dynamic list of found nearest neighbors
+        std::vector<SearchResult> nearestNeighbors; // W: dynamic list of found nearest neighbors
 
         // ep ← get enter point for hnsw
         node_id_t currentEntryPoint = entry_point_;
@@ -1260,14 +1257,15 @@ using namespace ROCKSDB_NAMESPACE;
 
         for (int l = max_layer_; l >= 1; --l)
         {
-            std::vector<node_id_t> nearestNeighbors = searchLayer(queryVector, currentEntryPoint, 30, l);
-            currentEntryPoint = nearestNeighbors[0];
+            std::vector<SearchResult> nearestNeighbors =
+                searchLayer(queryVector, currentEntryPoint, 30, l);
+            currentEntryPoint = nearestNeighbors[0].id;
         }
         nearestNeighbors = searchLayer(queryVector, currentEntryPoint, 30, 0);
 
         stats.accumulateTime(search_timer, stats.search_time);
         stats.addCount(1, stats.search_count);
-        return nearestNeighbors[0];
+        return nearestNeighbors[0].id;
     }
 
     void LSMVec::printState() const
