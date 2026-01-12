@@ -81,6 +81,15 @@ When using the shared library, make sure the runtime can locate `liblsmvec.so`.
 The example/test entry point is the binary built from `test/test.cc`. It accepts
 CLI flags defined in `include/config.h` and expects a dataset on disk.
 
+### Example: prepare a mini dataset
+
+You can generate a small SIFT dataset under `data/` and then run the examples
+below.
+
+```bash
+python data/prepare_sift_100k.py
+```
+
 ### Required flags
 
 * `--db <path>`: DB directory (required)
