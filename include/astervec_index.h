@@ -296,7 +296,6 @@ using namespace ROCKSDB_NAMESPACE;
         }
 
         void insertNode(node_id_t nodeId, const std::vector<float> &vector);
-        node_id_t knnSearch(const std::vector<float> &queryVector);
         Status deleteNode(node_id_t id);
         Status getNodeVector(node_id_t id, std::vector<float>* out);
 
@@ -482,13 +481,6 @@ using namespace ROCKSDB_NAMESPACE;
         );
 
         std::vector<node_id_t> selectNeighborsSimple(
-            const std::vector<float>& vector,
-            const std::vector<node_id_t>& candidateIds,
-            int maxNeighbors,
-            int layer
-        );
-
-        std::vector<node_id_t> selectNeighborsHeuristic1(
             const std::vector<float>& vector,
             const std::vector<node_id_t>& candidateIds,
             int maxNeighbors,
