@@ -26,7 +26,6 @@
 
 namespace astervec
 {
-using namespace ROCKSDB_NAMESPACE;
 
 // Thread-safety contract for AsterVec
 // =================================
@@ -633,4 +632,4 @@ using namespace ROCKSDB_NAMESPACE;
         bool     directIOSupported();        // probe O_DIRECT on the data FS
         size_t   dropSSTPageCache();         // posix_fadvise(DONTNEED) over *.sst
     };
-} // namespace ROCKSDB_NAMESPACE
+} // namespace astervec
