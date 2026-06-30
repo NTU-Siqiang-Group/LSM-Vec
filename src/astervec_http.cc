@@ -232,14 +232,13 @@ bool LoadHttpConfigFromEnv(HttpServerConfig* cfg, std::string* err) {
     cfg->data_dir = env_or("ASTERVEC_DATA_DIR", "/data");
     cfg->dim = env_int("ASTERVEC_DIM", 0);
 
-    std::string metric = env_or("ASTERVEC_METRIC", "l2");
-    for (auto& c : metric) c = static_cast<char>(std::tolower(c));
-    if      (metric == "l2")     cfg->metric = DistanceMetric::kL2;
-    else if (metric == "cosine") cfg->metric = DistanceMetric::kCosine;
-    else {
-        *err = "ASTERVEC_METRIC must be 'l2' or 'cosine' (got '" + metric + "')";
-        return false;
-    }
+    // Parse the env metric, but defer validation: it is consulted only on FIRST
+    // boot. Once an index exists, the persisted metric is authoritative (see the
+    // bootstrap branch below), so a stale or image-baked env value must never be
+    // able to block reopening an existing DB.
+    std::string env_metric = env_or("ASTERVEC_METRIC", "l2");
+    for (auto& c : env_metric) c = static_cast<char>(std::tolower(c));
+    const bool env_metric_set = (getenv_compat("ASTERVEC_METRIC") != nullptr);
 
     cfg->m                  = env_int("ASTERVEC_M", 8);
     cfg->m_max              = env_int("ASTERVEC_MMAX", 24);
@@ -251,40 +250,44 @@ bool LoadHttpConfigFromEnv(HttpServerConfig* cfg, std::string* err) {
     cfg->enable_stats       = env_bool("ASTERVEC_ENABLE_STATS", false);
     cfg->log_level          = env_or("ASTERVEC_LOG_LEVEL", "info");
 
-    // Bootstrap: if data dir already has a bootstrap.json, the dim/metric
-    // there is authoritative. Otherwise this is first boot and env dim/
-    // metric must be present.
+    // Bootstrap: once a data dir holds a bootstrap.json, its dim/metric is the
+    // single source of truth. On reopen we ALWAYS adopt the persisted values; a
+    // differing env value is logged and ignored, never fatal — the server must
+    // be able to reopen an existing index regardless of how the environment is
+    // configured. The env dim/metric apply only on first boot.
     BootstrapState saved;
     if (readBootstrap(cfg->data_dir, &saved)) {
-        // Existing DB: validate that env matches if env was set.
-        if (cfg->dim > 0 && cfg->dim != saved.dim) {
-            *err = "ASTERVEC_DIM (" + std::to_string(cfg->dim) +
-                   ") does not match existing DB dim (" +
-                   std::to_string(saved.dim) + ")";
-            return false;
-        }
-        cfg->dim = saved.dim;
         std::string saved_metric = saved.metric;
         for (auto& c : saved_metric) c = static_cast<char>(std::tolower(c));
-        if (saved_metric != metric) {
-            // Allow env to default to l2 silently if the DB says l2.
-            if (!(metric == "l2" && getenv_compat("ASTERVEC_METRIC") == nullptr)) {
-                *err = "ASTERVEC_METRIC ('" + metric +
-                       "') does not match existing DB metric ('" +
-                       saved.metric + "')";
-                return false;
-            }
+
+        if (cfg->dim > 0 && cfg->dim != saved.dim) {
+            std::cerr << "{\"event\":\"config_env_overridden\",\"field\":\"dim\""
+                      << ",\"env\":" << cfg->dim << ",\"using\":" << saved.dim << "}\n";
         }
-        if      (saved_metric == "cosine") cfg->metric = DistanceMetric::kCosine;
-        else                               cfg->metric = DistanceMetric::kL2;
+        if (env_metric_set && saved_metric != env_metric) {
+            std::cerr << "{\"event\":\"config_env_overridden\",\"field\":\"metric\""
+                      << ",\"env\":\"" << env_metric << "\",\"using\":\""
+                      << saved_metric << "\"}\n";
+        }
+
+        cfg->dim = saved.dim;
+        cfg->metric = (saved_metric == "cosine") ? DistanceMetric::kCosine
+                                                 : DistanceMetric::kL2;
     } else {
-        // First boot. If ASTERVEC_DIM was provided (operator pre-init / back-compat),
-        // persist it now and the server opens the DB at boot. Otherwise leave the
-        // index UNINITIALIZED (cfg->dim stays 0, no bootstrap written): the server
-        // boots without a DB and the user calls PUT /v1/index to set the dimension.
+        // First boot: the env metric is now authoritative, so validate it here.
+        if (env_metric != "l2" && env_metric != "cosine") {
+            *err = "ASTERVEC_METRIC must be 'l2' or 'cosine' (got '" + env_metric + "')";
+            return false;
+        }
+        cfg->metric = (env_metric == "cosine") ? DistanceMetric::kCosine
+                                               : DistanceMetric::kL2;
+        // If ASTERVEC_DIM was provided (operator pre-init / back-compat), persist
+        // it now and open the DB at boot. Otherwise leave the index UNINITIALIZED
+        // (cfg->dim stays 0, no bootstrap written): the server boots without a DB
+        // and the user sets the dimension via PUT /v1/index.
         if (cfg->dim > 0) {
             std::string err_w;
-            if (!writeBootstrap(cfg->data_dir, {cfg->dim, metric}, &err_w)) {
+            if (!writeBootstrap(cfg->data_dir, {cfg->dim, env_metric}, &err_w)) {
                 *err = err_w;
                 return false;
             }

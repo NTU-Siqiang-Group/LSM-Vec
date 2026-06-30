@@ -53,10 +53,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=build /src/build/bin/astervec_http /usr/local/bin/
 
 # Default config — every value is also overridable by env var (see docs/HTTP_API.md).
+# NOTE: deliberately do NOT bake ASTERVEC_DIM or ASTERVEC_METRIC here. The server
+# is dim/metric-agnostic at boot: an uninitialized instance learns both from the
+# user's create_index call, persists them to bootstrap.json, and adopts them on
+# every restart. Baking a metric default (e.g. =l2) silently breaks any user who
+# creates a cosine index — the container would conflict with its own DB on restart.
 ENV ASTERVEC_DATA_DIR=/data \
     ASTERVEC_PORT=8000 \
-    ASTERVEC_HTTP_THREADS=1 \
-    ASTERVEC_METRIC=l2
+    ASTERVEC_HTTP_THREADS=1
 
 EXPOSE 8000
 VOLUME ["/data"]
