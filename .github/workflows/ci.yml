@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+
+# Rapid successive pushes only test the newest commit; older queued runs cancel.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Kills a hung build/test instead of GitHub's 6-hour default.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS runners bill at 10x minutes on private repos — run them only on
+        # the public repo; the private mirror keeps Linux-only coverage.
+        os: ${{ github.repository == 'NTU-Siqiang-Group/AsterVec' && fromJSON('["ubuntu-24.04", "macos-15"]') || fromJSON('["ubuntu-24.04"]') }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake libboost-dev libzstd-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake boost zstd jemalloc
+
+      - name: Get Aster submodule SHA
+        id: astersha
+        run: echo "sha=$(git -C lib/aster rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Aster static lib
+        uses: actions/cache@v4
+        with:
+          path: lib/aster/librocksdb.a
+          key: aster-${{ matrix.os }}-${{ steps.astersha.outputs.sha }}
+
+      - name: Build Aster (if not cached)
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            export CPATH="$(brew --prefix)/include"
+            export LIBRARY_PATH="$(brew --prefix)/lib"
+          fi
+          test -f lib/aster/librocksdb.a || make aster
+
+      - name: Build and run unit tests
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            export CPATH="$(brew --prefix)/include"
+            export LIBRARY_PATH="$(brew --prefix)/lib"
+          fi
+          make unit_test
