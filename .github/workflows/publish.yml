@@ -53,14 +53,28 @@ jobs:
             yum install -y libzstd-devel boost-devel &&
             cd {project} && make aster
 
+          # macOS: build zstd from source at the wheel's deployment target and
+          # link it STATICALLY. Brew's bottles are compiled for the runner's own
+          # macOS (e.g. min 15.0 on macos-15), so bundling brew's libzstd.dylib
+          # would force the wheel's min-version up and delocate hard-fails.
           CIBW_BEFORE_ALL_MACOS: >
-            brew install zstd boost jemalloc &&
+            brew install boost jemalloc &&
             export MACOSX_DEPLOYMENT_TARGET=${{ matrix.macosx_target }} &&
-            export CPATH="$(brew --prefix)/include" &&
+            curl -sL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz | tar xz -C /tmp &&
+            make -C /tmp/zstd-1.5.7/lib -j3 libzstd.a &&
+            mkdir -p /tmp/zstd-prefix/lib /tmp/zstd-prefix/include &&
+            cp /tmp/zstd-1.5.7/lib/libzstd.a /tmp/zstd-prefix/lib/ &&
+            cp /tmp/zstd-1.5.7/lib/*.h /tmp/zstd-prefix/include/ &&
+            export CPATH="/tmp/zstd-prefix/include:$(brew --prefix)/include" &&
             cd {project} &&
             make aster
 
           CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=${{ matrix.macosx_target }}"
+
+          # macOS-only cmake args: same as the global set plus an explicit ZSTD_LIB
+          # pointing at the source-built static lib (pre-seeds the find_library
+          # cache in CMakeLists.txt, so brew's dylib can never be picked up).
+          CIBW_CONFIG_SETTINGS_MACOS: "cmake.args=-DASTERVEC_BUILD_PYTHON=ON;-DASTERVEC_PYTHON_STATIC=ON;-DASTERVEC_BUILD_HTTP=OFF;-DASTERVEC_BUILD_UNIT_TESTS=OFF;-DZSTD_LIB=/tmp/zstd-prefix/lib/libzstd.a"
 
           # Build only the Python extension for wheels, linked statically.
           CIBW_CONFIG_SETTINGS: "cmake.args=-DASTERVEC_BUILD_PYTHON=ON;-DASTERVEC_PYTHON_STATIC=ON;-DASTERVEC_BUILD_HTTP=OFF;-DASTERVEC_BUILD_UNIT_TESTS=OFF"
