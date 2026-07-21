@@ -4,6 +4,24 @@ All notable changes to AsterVec are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.1]
+
+Packaging and distribution release — no engine changes.
+
+### Added
+- **Prebuilt Linux aarch64 wheels** — `pip install aster-vec` now works in Docker
+  on Apple Silicon, on AWS Graviton, and on Raspberry Pi 5.
+- **Prebuilt macOS Intel wheels** (x86_64, macOS 13+).
+- **CI** — unit-test workflow on Linux and macOS runs on every push and PR.
+- README: CI / PyPI / Python-version / license badges; the quick start now
+  installs with a single `pip install aster-vec`.
+
+### Fixed
+- PyPI project page: the logo renders again (absolute image URL) and the sidebar
+  links to Documentation, Changelog, and Issues.
+- macOS wheels statically link a source-built zstd, so the wheel's minimum
+  macOS version no longer depends on the build runner's Homebrew bottles.
+
 ## [0.2.0]
 
 Features added to the engine since the initial public release.

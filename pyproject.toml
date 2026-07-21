@@ -4,8 +4,8 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "aster-vec"
-version = "0.2.0"
-description = "AsterVec: Persistent disk-oriented vector database for approximate nearest-neighbor search"
+version = "0.2.1"
+description = "AsterVec: memory-friendly embedded vector database for on-device AI memory (disk-based HNSW in an LSM-tree)"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.9"
@@ -32,8 +32,11 @@ classifiers = [
 keywords = ["vector-database", "ann", "hnsw", "rocksdb", "similarity-search"]
 
 [project.urls]
-Homepage = "https://github.com/NTU-Siqiang-Group/AsterVec"
+Homepage = "https://lsmvec.com"
 Repository = "https://github.com/NTU-Siqiang-Group/AsterVec"
+Documentation = "https://github.com/NTU-Siqiang-Group/AsterVec/blob/main/docs/API_REFERENCE.md"
+Changelog = "https://github.com/NTU-Siqiang-Group/AsterVec/blob/main/CHANGELOG.md"
+Issues = "https://github.com/NTU-Siqiang-Group/AsterVec/issues"
 
 [tool.scikit-build]
 wheel.packages = []
