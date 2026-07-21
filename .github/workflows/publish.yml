@@ -16,9 +16,17 @@ jobs:
           - name: linux-x86_64
             os: ubuntu-22.04
             arch: x86_64
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            arch: aarch64
           - name: macos-arm64
-            os: macos-14
+            os: macos-15
             arch: arm64
+            macosx_target: "14.0"
+          - name: macos-x86_64
+            os: macos-15-intel
+            arch: x86_64
+            macosx_target: "13.0"
 
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +40,7 @@ jobs:
 
           # Use manylinux_2_28 for broader glibc compatibility
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
 
           # AsterVec supports CPython 3.9+.
           CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-*"
@@ -46,12 +55,12 @@ jobs:
 
           CIBW_BEFORE_ALL_MACOS: >
             brew install zstd boost jemalloc &&
-            export MACOSX_DEPLOYMENT_TARGET=14.0 &&
+            export MACOSX_DEPLOYMENT_TARGET=${{ matrix.macosx_target }} &&
             export CPATH="$(brew --prefix)/include" &&
             cd {project} &&
             make aster
 
-          CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=14.0"
+          CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=${{ matrix.macosx_target }}"
 
           # Build only the Python extension for wheels, linked statically.
           CIBW_CONFIG_SETTINGS: "cmake.args=-DASTERVEC_BUILD_PYTHON=ON;-DASTERVEC_PYTHON_STATIC=ON;-DASTERVEC_BUILD_HTTP=OFF;-DASTERVEC_BUILD_UNIT_TESTS=OFF"
