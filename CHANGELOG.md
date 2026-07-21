@@ -21,6 +21,9 @@ Packaging and distribution release — no engine changes.
   links to Documentation, Changelog, and Issues.
 - macOS wheels statically link a source-built zstd, so the wheel's minimum
   macOS version no longer depends on the build runner's Homebrew bottles.
+- Wheels no longer contain CPU-specific (`-march=native`) RocksDB code, which
+  could crash with `Illegal instruction` on machines with older CPUs than the
+  build runner. Aster is now built with `PORTABLE=1` for all shipped artifacts.
 
 ## [0.2.0]
 
