@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Embed AsterVec in your Python process (the primary way to use the engine).
 
-Run after building + installing the engine module:
-    git submodule update --init --recursive
-    make aster
-    python -m pip install .
+Run after installing the engine module:
+    pip install aster-vec
     python examples/embed_quickstart.py
 """
 import os

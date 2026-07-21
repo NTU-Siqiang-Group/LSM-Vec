@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="docs/assets/aster-vec-logo-text.png" alt="AsterVec" width="350">
+  <img src="https://raw.githubusercontent.com/NTU-Siqiang-Group/AsterVec/main/docs/assets/aster-vec-logo-text.png" alt="AsterVec" width="350">
 </p>
 
 <p align="center">
-  <b><span style="font-size: 1.15em;">Memory-friendly vector engine for on-device AI memory.</span></b>
+  <b>Memory-friendly vector engine for on-device AI memory.</b>
 </p>
 
 <p align="center">
@@ -11,6 +11,13 @@
   <a href="#install--build">Install / Build</a> ·
   <a href="docs/API_REFERENCE.md">Python / C++ API</a> ·
   <a href="docs/HTTP_API.md">HTTP API</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/NTU-Siqiang-Group/AsterVec/actions/workflows/ci.yml"><img src="https://github.com/NTU-Siqiang-Group/AsterVec/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://pypi.org/project/aster-vec/"><img src="https://img.shields.io/pypi/v/aster-vec" alt="PyPI"></a>
+  <a href="https://pypi.org/project/aster-vec/"><img src="https://img.shields.io/pypi/pyversions/aster-vec" alt="Python versions"></a>
+  <a href="https://github.com/NTU-Siqiang-Group/AsterVec/blob/main/LICENSE"><img src="https://img.shields.io/github/license/NTU-Siqiang-Group/AsterVec" alt="License"></a>
 </p>
 
 AsterVec lets AI applications run persistent vector search with much less system
@@ -65,9 +72,7 @@ AsterVec is embedded directly in your application. (Prefer a network service? Se
 ### Python (`import astervec`)
 
 ```bash
-git submodule update --init --recursive
-make aster
-python -m pip install .          # builds + installs the astervec module
+pip install aster-vec
 ```
 
 ```python
@@ -151,8 +156,9 @@ budgets.
 
 ## Install / Build
 
-The Quick Start above is the normal path for using AsterVec from Python or C++.
-This section is for local development, contributors, and source builds.
+`pip install aster-vec` covers Linux (x86_64 / aarch64) and macOS; on other
+platforms (e.g. Windows, Alpine) build from source below. This section is also
+the path for local development and contributors.
 
 ### Prerequisites
 
@@ -260,6 +266,9 @@ batch read, etc.).
   jemalloc: `LD_PRELOAD=/lib/x86_64-linux-gnu/libjemalloc.so.2 python your_app.py`.
 - **`libastervec.so: cannot open shared object file`** — add the build dir to the
   loader path: `export LD_LIBRARY_PATH=$PWD/build/lib:$LD_LIBRARY_PATH`.
+- **`No matching distribution found` on `pip install aster-vec`** — no prebuilt
+  package for your platform yet (shipped: Linux x86_64/aarch64, macOS). Build
+  from source: [Install / Build](#install--build).
 
 ## Contributing
 

@@ -27,7 +27,16 @@ brew install cmake boost zstd jemalloc
 
 ## Installation
 
-### 1. Build Aster (required before `pip install`)
+### 1. Install
+
+```bash
+pip install aster-vec
+```
+
+On platforms without a prebuilt package (e.g. Windows), or for development,
+build from source:
+
+#### Building from source
 
 `pip install .` runs CMake internally, which needs Aster's static library
 (`lib/aster/librocksdb.a`) to already exist. You do **not** need `make lib` — only
