@@ -50,7 +50,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: lib/aster/librocksdb.a
-          key: aster-${{ matrix.os }}-${{ steps.astersha.outputs.sha }}
+          # "portable" in the key: the lib must be built with PORTABLE=1 —
+          # GitHub's runner fleet is CPU-heterogeneous, and a cached
+          # -march=native build SIGILLs when replayed on an older runner.
+          key: aster-portable-${{ matrix.os }}-${{ steps.astersha.outputs.sha }}
 
       - name: Build Aster (if not cached)
         run: |
@@ -58,7 +61,7 @@ jobs:
             export CPATH="$(brew --prefix)/include"
             export LIBRARY_PATH="$(brew --prefix)/lib"
           fi
-          test -f lib/aster/librocksdb.a || make aster
+          test -f lib/aster/librocksdb.a || PORTABLE=1 make aster
 
       - name: Build and run unit tests
         run: |

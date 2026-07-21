@@ -48,10 +48,12 @@ jobs:
 
           # AsterVec 0.2.0 builds Aster zstd-only. Do not install/link snappy,
           # lz4, bzip2, or zlib for the wheel build.
+          # PORTABLE=1: never let RocksDB build with -march=native — wheels run
+          # on end-user CPUs, not on the CI machine that happened to build them.
           CIBW_BEFORE_ALL_LINUX: >
             yum install -y epel-release &&
             yum install -y libzstd-devel boost-devel &&
-            cd {project} && make aster
+            cd {project} && PORTABLE=1 make aster
 
           # macOS: build zstd from source at the wheel's deployment target and
           # link it STATICALLY. Brew's bottles are compiled for the runner's own
@@ -59,6 +61,7 @@ jobs:
           # would force the wheel's min-version up and delocate hard-fails.
           CIBW_BEFORE_ALL_MACOS: >
             brew install boost jemalloc &&
+            export PORTABLE=1 &&
             export MACOSX_DEPLOYMENT_TARGET=${{ matrix.macosx_target }} &&
             curl -sL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz | tar xz -C /tmp &&
             make -C /tmp/zstd-1.5.7/lib -j3 libzstd.a &&
