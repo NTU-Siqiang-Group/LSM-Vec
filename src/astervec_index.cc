@@ -61,7 +61,8 @@ using namespace ROCKSDB_NAMESPACE;
             auto table_options =
                 options_.table_factory->GetOptions<rocksdb::BlockBasedTableOptions>();
             if (table_options) {
-                table_options->block_cache = rocksdb::NewLRUCache(32 * 1024 * 1024);
+                table_options->block_cache =
+                    rocksdb::NewLRUCache(db_options_.block_cache_bytes);
             }
             options_.max_background_jobs = 8;
             options_.max_background_compactions = 4;
