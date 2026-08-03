@@ -20,6 +20,7 @@ cmake --build build --target astervec_http -j
 ASTERVEC_DATA_DIR=./data ASTERVEC_PORT=8000 ./build/bin/astervec_http
 
 # Or via Docker:
+docker build -t astervec:latest .    # needs lib/aster populated first (make aster)
 docker run -d --name astervec -p 8000:8000 -v "$(pwd)/data:/data" astervec:latest
 ```
 

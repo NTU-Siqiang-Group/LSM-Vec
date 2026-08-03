@@ -15,6 +15,10 @@ Packaging and distribution release — no engine changes.
 - **CI** — unit-test workflow on Linux and macOS runs on every push and PR.
 - README: CI / PyPI / Python-version / license badges; the quick start now
   installs with a single `pip install aster-vec`.
+- New `AsterVecDBOptions` tunables: `edge_cache_size` (now exposed to Python)
+  and `block_cache_bytes` (previously hardcoded at 32 MB).
+- `docs/TROUBLESHOOTING.md` — install/build/runtime fixes collected in one
+  place (moved out of the README).
 
 ### Fixed
 - PyPI project page: the logo renders again (absolute image URL) and the sidebar

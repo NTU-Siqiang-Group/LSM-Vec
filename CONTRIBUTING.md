@@ -20,8 +20,15 @@ make unit_test    # build + run the test suite
 
 **Prerequisites:** a C++17 compiler (GCC 8+ / Clang 10+), CMake ≥ 3.10, GNU Make,
 Boost (headers only), and **zstd** (the only required compression library — Aster
-is built zstd-only). On macOS also install `jemalloc`. See the
-[README](README.md#install--build) for the package commands.
+is built zstd-only). On macOS also install `jemalloc`.
+
+```bash
+# Ubuntu / Debian
+sudo apt-get install -y build-essential cmake libboost-dev libzstd-dev
+
+# macOS (Homebrew)
+brew install cmake boost zstd jemalloc
+```
 
 To work on the Python bindings: `python -m pip install .` (after `make aster`).
 
@@ -45,6 +52,21 @@ make unit_test_ubsan           # UndefinedBehaviorSanitizer build
 
 Please make sure `make unit_test` passes before opening a pull request, and add
 tests for new behavior where practical.
+
+## Test binary / benchmarking
+
+`make` also builds `build/bin/astervec`, a CLI harness that loads a dataset,
+builds the index, runs k-NN queries, and compares against ground truth — useful
+for benchmarking (not the way you'd use the engine in an app).
+
+```bash
+cd data && python prepare_sift_100k.py && cd ..
+./build/bin/astervec --db ./run/db --data-dir ./data/sift_100k_ \
+  --M 8 --Mmax 24 --efc 32 --k 10 --efs 128 --stats --out ./run/output.txt
+```
+
+Run `./build/bin/astervec --help` for all flags (HNSW params, storage backend,
+batch read, etc.).
 
 ## Coding conventions
 
