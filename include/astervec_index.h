@@ -380,6 +380,61 @@ namespace astervec
         std::vector<float> batch_read_buf;
         std::unordered_map<node_id_t, uint32_t> visited_map;
         uint32_t visited_version = 0;
+        // 20260516_dense_visited (port): dense uint16 epoch array for direct
+        // ids (bit 63 = 0) — an array index replaces a hash emplace on the
+        // hottest per-neighbor check. The map stays as the fallback for
+        // indirect ids. 2 B per id slot per scratch (≈2 MB per thread at 1M);
+        // the uint16 epoch wraps every 65,535 searches, forcing one cheap
+        // fill-clear. ASTERVEC_DENSE_VISITED=0 restores the map-only path.
+        std::vector<uint16_t> visited_dense;
+        uint16_t dense_version = 0;
+
+        static bool denseEnabled() {
+            static const bool v = [] {
+                const char* e = std::getenv("ASTERVEC_DENSE_VISITED");
+                return !(e && e[0] == '0');
+            }();
+            return v;
+        }
+
+        // Call once at the start of each search (replaces the inline
+        // version-bump both searchLayer overloads used to carry).
+        void beginSearch() {
+            ++visited_version;
+            if (visited_version == 0) {
+                visited_map.clear();
+                visited_version = 1;
+            }
+            if (denseEnabled()) {
+                ++dense_version;
+                if (dense_version == 0) {
+                    std::fill(visited_dense.begin(), visited_dense.end(),
+                              static_cast<uint16_t>(0));
+                    dense_version = 1;
+                }
+            }
+        }
+
+        // Returns true when the id was NOT yet visited this search (and
+        // marks it). Direct ids take the dense array; bit-63 indirect ids
+        // fall back to the versioned map.
+        bool visitedInsert(node_id_t id) {
+            if (denseEnabled() && (id >> 63) == 0) {
+                size_t i = static_cast<size_t>(id);
+                if (i >= visited_dense.size()) {
+                    visited_dense.resize(i + 4096, 0);
+                }
+                if (visited_dense[i] == dense_version) return false;
+                visited_dense[i] = dense_version;
+                return true;
+            }
+            auto [it, inserted] = visited_map.emplace(id, visited_version);
+            if (inserted || it->second != visited_version) {
+                it->second = visited_version;
+                return true;
+            }
+            return false;
+        }
     };
 
     class AsterVec

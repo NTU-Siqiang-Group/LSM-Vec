@@ -1461,18 +1461,9 @@ using namespace ROCKSDB_NAMESPACE;
         // Versioned visited map (reused across calls inside one scratch,
         // zero allocation after warmup). Wraparound at uint32_t::max
         // forces a one-time clear.
-        ++scratch.visited_version;
-        if (scratch.visited_version == 0) {
-            scratch.visited_map.clear();
-            scratch.visited_version = 1;
-        }
+        scratch.beginSearch();
         auto visitedInsert = [&](node_id_t id) -> bool {
-            auto [it, inserted] = scratch.visited_map.emplace(id, scratch.visited_version);
-            if (inserted || it->second != scratch.visited_version) {
-                it->second = scratch.visited_version;
-                return true;  // newly visited
-            }
-            return false;  // already visited
+            return scratch.visitedInsert(id);
         };
 
         // Candidates: max-heap by (-distance) => smallest distance comes first
@@ -1685,18 +1676,9 @@ using namespace ROCKSDB_NAMESPACE;
         }
 
         // Bump visited version (same pattern as the unfiltered overload).
-        ++scratch.visited_version;
-        if (scratch.visited_version == 0) {
-            scratch.visited_map.clear();
-            scratch.visited_version = 1;
-        }
+        scratch.beginSearch();
         auto visitedInsert = [&](node_id_t id) -> bool {
-            auto [it, inserted] = scratch.visited_map.emplace(id, scratch.visited_version);
-            if (inserted || it->second != scratch.visited_version) {
-                it->second = scratch.visited_version;
-                return true;  // newly visited
-            }
-            return false;  // already visited
+            return scratch.visitedInsert(id);
         };
 
         // Helper: fetch & parse metadata for node id.
