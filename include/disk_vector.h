@@ -28,8 +28,8 @@
 //
 // Read-side methods (readVectorFromDisk, readVectorsBatch,
 // readVectorsBatchFlat, exists) are safe to call concurrently from
-// multiple threads. Internally, the page cache (pageCache_ /
-// pageOrder_) is protected by a std::shared_mutex; cache lookups take
+// multiple threads. Internally, the page cache (cacheSlots_ /
+// pageToSlot_) is protected by a std::shared_mutex; cache lookups take
 // shared locks, insertions and evictions take unique locks. Disk I/O
 // happens outside the cache mutex.
 //
@@ -638,7 +638,7 @@ private:
 
     // Page cache (FIFO) in units of full pages (4KB each).
     //
-    // Concurrency: pageCache_ + pageOrder_ are protected by page_mu_,
+    // Concurrency: cacheSlots_ + pageToSlot_ are protected by page_mu_,
     // a shared_mutex. Read paths take shared_lock for lookups; insertions
     // and evictions take unique_lock. Disk I/O (pread) is performed
     // outside any lock — concurrent readers may pread the same page on
@@ -660,12 +660,38 @@ private:
     bool trackBatchStats_ = false;
 
     struct PageBuf {
-        std::vector<char> data; // always kPageSize bytes
+        std::vector<char> data;    // always kPageSize bytes once used
+        size_t pageId = SIZE_MAX;  // page currently held (SIZE_MAX = none)
     };
 
-    std::unordered_map<size_t, PageBuf> pageCache_; // pageId -> data
-    std::deque<size_t>                  pageOrder_; // FIFO order of pageIds
+    // 20260722_flat_page_index (port of opt-branch #65): the page cache is a
+    // fixed arena of slots plus a direct-mapped pageId->slot table, replacing
+    // unordered_map<pageId, PageBuf> + FIFO deque. The batch read path does
+    // one cache lookup per vector (~420M per 1M build); an array index beats
+    // a hash find at that volume. Slots fill sequentially; once full, a
+    // rotating hand IS the FIFO order. Buffer allocations live in the arena
+    // and are inherently recycled. Same lock contract as before: lookups
+    // under shared page_mu_, slot publish/evict under unique page_mu_.
+    std::vector<PageBuf> cacheSlots_;  // arena, grows up to maxCachedPages_
+    std::vector<int32_t> pageToSlot_;  // pageId -> slot index, -1 = absent
+    size_t cachedCount_ = 0;           // slots in use (<= maxCachedPages_)
+    size_t fifoHand_ = 0;              // next eviction candidate
     mutable std::shared_mutex           page_mu_;
+
+    // Direct-mapped lookup helper. Caller holds page_mu_ (shared or unique).
+    int32_t cacheSlotOf(size_t pageId) const {
+        return pageId < pageToSlot_.size() ? pageToSlot_[pageId] : -1;
+    }
+    // Drop every cached page but keep slot allocations for reuse. Caller
+    // holds unique page_mu_ (or is single-threaded, e.g. deserialize).
+    void resetPageCache_locked() {
+        for (auto& s : cacheSlots_) {
+            s.pageId = SIZE_MAX;
+        }
+        std::fill(pageToSlot_.begin(), pageToSlot_.end(), -1);
+        cachedCount_ = 0;
+        fifoHand_ = 0;
+    }
 
     int readFd_ = -1;  // file descriptor for pread-based I/O
 
@@ -869,9 +895,10 @@ private:
         }
         // Update read cache if page is cached
         std::unique_lock<std::shared_mutex> lk(page_mu_);
-        auto cit = pageCache_.find(swb.pageId);
-        if (cit != pageCache_.end()) {
-            std::memcpy(cit->second.data.data(), swb.data.data(), kPageSize);
+        int32_t cs = cacheSlotOf(swb.pageId);
+        if (cs >= 0) {
+            std::memcpy(cacheSlots_[static_cast<size_t>(cs)].data.data(),
+                        swb.data.data(), kPageSize);
         }
     }
 
@@ -990,11 +1017,13 @@ private:
     // setMaxCachedPages and from inside loadPageToCache (which already
     // holds the unique lock).
     void evictIfNeeded_locked() {
-        if (maxCachedPages_ == 0) return;
-        while (pageCache_.size() > maxCachedPages_) {
-            size_t victim = pageOrder_.front();
-            pageOrder_.pop_front();
-            pageCache_.erase(victim);
+        // Only relevant after a shrinking setMaxCachedPages (rare admin op);
+        // the load path never overfills. Shrinking with a rotating hand has
+        // no incremental form, so drop everything and release the arena.
+        if (maxCachedPages_ == 0 || cachedCount_ > maxCachedPages_) {
+            resetPageCache_locked();
+            cacheSlots_.clear();
+            cacheSlots_.shrink_to_fit();
         }
     }
 
@@ -1028,7 +1057,7 @@ private:
         // (1) Fast check under shared lock.
         {
             std::shared_lock<std::shared_mutex> lk(page_mu_);
-            if (pageCache_.find(pageId) != pageCache_.end()) return;
+            if (cacheSlotOf(pageId) >= 0) return;
         }
 
         // (2) pread WITHOUT cache lock — multiple thread misses parallelize.
@@ -1063,28 +1092,33 @@ private:
         // resolved by pushing the section lock inside overlayWriteBuf.
         overlayWriteBuf(pageId, buf);
 
-        // (3) Re-acquire unique; re-check, then recycle or insert.
+        // (3) Re-acquire unique; re-check, then publish into a slot. The
+        // pread happened into a local staging buf outside the lock, so
+        // publishing moves (fresh slot) or swaps (recycled slot) — never a
+        // 4 KB copy, and the lock is never held across I/O.
         std::unique_lock<std::shared_mutex> lk(page_mu_);
-        if (pageCache_.find(pageId) != pageCache_.end()) return;   // raced
+        if (cacheSlotOf(pageId) >= 0) return;   // raced
 
-        if (pageCache_.size() >= maxCachedPages_) {
-            // 20260516_page_buf_recycle: extract victim node_handle to
-            // reuse its 4 KB allocation. Move our fresh buf into it.
-            size_t victim = pageOrder_.front();
-            pageOrder_.pop_front();
-            auto node = pageCache_.extract(victim);
-            if (!node.empty()) {
-                node.mapped() = std::move(buf);
-                node.key() = pageId;
-                pageCache_.insert(std::move(node));
-                pageOrder_.push_back(pageId);
-                return;
+        size_t slot;
+        if (cachedCount_ < maxCachedPages_) {
+            slot = cachedCount_++;
+            if (slot >= cacheSlots_.size()) cacheSlots_.resize(slot + 1);
+        } else {
+            // Rotating hand = FIFO in fill order.
+            slot = fifoHand_;
+            fifoHand_ = (fifoHand_ + 1) % maxCachedPages_;
+            size_t victimPage = cacheSlots_[slot].pageId;
+            if (victimPage != SIZE_MAX && victimPage < pageToSlot_.size()) {
+                pageToSlot_[victimPage] = -1;
             }
-            // Fallthrough if extract failed (shouldn't happen — pageOrder_
-            // is the canonical source of victim ids).
         }
-        pageCache_.emplace(pageId, std::move(buf));
-        pageOrder_.push_back(pageId);
+        PageBuf& dst = cacheSlots_[slot];
+        dst.data.swap(buf.data);   // recycles the victim's allocation into buf
+        dst.pageId = pageId;
+        if (pageId >= pageToSlot_.size()) {
+            pageToSlot_.resize(pageId + 1024, -1);
+        }
+        pageToSlot_[pageId] = static_cast<int32_t>(slot);
     }
 
     // Try to read a vector from cache by pageId & slot. Dequantizes SQ8 → float32.
@@ -1094,10 +1128,10 @@ private:
     bool tryReadFromCache(size_t pageId, uint16_t slot, std::vector<float>& vec) {
         if (maxCachedPages_ == 0) return false;
         std::shared_lock<std::shared_mutex> lk(page_mu_);
-        auto it = pageCache_.find(pageId);
-        if (it == pageCache_.end()) return false;
+        int32_t cs = cacheSlotOf(pageId);
+        if (cs < 0) return false;
 
-        const PageBuf& buf = it->second;
+        const PageBuf& buf = cacheSlots_[static_cast<size_t>(cs)];
         size_t offsetInPage = static_cast<size_t>(slot) * recordSize_;
         if (offsetInPage + recordSize_ > buf.data.size()) {
             return false;
@@ -1148,10 +1182,10 @@ private:
     void updateCacheAfterWrite(size_t pageId, uint16_t slot, const std::vector<float>& vec) {
         if (maxCachedPages_ == 0) return;
         std::unique_lock<std::shared_mutex> lk(page_mu_);
-        auto it = pageCache_.find(pageId);
-        if (it == pageCache_.end()) return;
+        int32_t cs = cacheSlotOf(pageId);
+        if (cs < 0) return;
 
-        PageBuf& buf = it->second;
+        PageBuf& buf = cacheSlots_[static_cast<size_t>(cs)];
         size_t offsetInPage = static_cast<size_t>(slot) * recordSize_;
         if (offsetInPage + recordSize_ > buf.data.size()) {
             return;
@@ -1548,10 +1582,10 @@ public:
             std::shared_lock<std::shared_mutex> lk(page_mu_);
             for (const auto& miss : miss_scratch) {
                 if (maxCachedPages_ > 0) {
-                    auto cit = pageCache_.find(miss.pageId);
-                    if (cit != pageCache_.end()) {
+                    int32_t cs = cacheSlotOf(miss.pageId);
+                    if (cs >= 0) {
                         size_t offsetInPage = static_cast<size_t>(miss.slot) * recordSize_;
-                        dequantize(cit->second.data.data() + offsetInPage,
+                        dequantize(cacheSlots_[static_cast<size_t>(cs)].data.data() + offsetInPage,
                                    out + miss.idx * dim, dim_);
                         pageCacheHits_.fetch_add(1, std::memory_order_relaxed);
                         continue;
@@ -1589,10 +1623,10 @@ public:
         {
             std::shared_lock<std::shared_mutex> lk(page_mu_);
             for (const auto& miss : miss_scratch) {
-                auto cit = pageCache_.find(miss.pageId);
-                if (cit != pageCache_.end()) {
+                int32_t cs = cacheSlotOf(miss.pageId);
+                if (cs >= 0) {
                     size_t offsetInPage = static_cast<size_t>(miss.slot) * recordSize_;
-                    dequantize(cit->second.data.data() + offsetInPage,
+                    dequantize(cacheSlots_[static_cast<size_t>(cs)].data.data() + offsetInPage,
                                out + miss.idx * dim, dim_);
                 } else {
                     // Cache full, page was evicted — direct read.
@@ -1864,8 +1898,7 @@ public:
         reloadDeleteFlags(totalVectors_);
         {
             std::unique_lock<std::shared_mutex> lk(page_mu_);
-            pageCache_.clear();
-            pageOrder_.clear();
+            resetPageCache_locked();
         }
         resetPageCacheStats();
 
