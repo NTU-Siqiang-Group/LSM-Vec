@@ -76,8 +76,21 @@ static constexpr node_id_t k_invalid_node_id =
 class IVectorStorage {
 public:
     struct PageCacheStats {
+        // Vector-level lookups served from the user-space page cache.
         std::size_t hits = 0;
+        // Vector-level lookups whose page was not cached. Several misses in
+        // one batch can map to the same page, so this is NOT the number of
+        // disk reads — see page_loads for actual I/O.
         std::size_t misses = 0;
+        // Lookups served from an unflushed section write buffer.
+        std::size_t write_buf_hits = 0;
+        // Actual 4 KB page reads issued to the file (the real I/O count).
+        std::size_t page_loads = 0;
+        // Batch-read locality (readVectorsBatchFlat), tracked only when
+        // stats tracking is enabled on the storage:
+        std::size_t batch_calls = 0;
+        std::size_t batch_ids = 0;
+        std::size_t batch_unique_pages = 0;
     };
 
     virtual ~IVectorStorage() = default;
@@ -142,6 +155,14 @@ public:
 
     // Optional page cache stats. Default returns zeros.
     virtual PageCacheStats getPageCacheStats() const { return {}; }
+
+    // Reset page-cache counters (e.g. between build and query phases so
+    // per-phase hit rates can be reported). Default is no-op.
+    virtual void resetPageCacheStats() {}
+
+    // Enable/disable extra stats tracking that has a per-call cost
+    // (currently: batch locality accounting). Default is no-op.
+    virtual void setStatsTracking(bool /*enabled*/) {}
 };
 
 class BasicVectorStorage : public IVectorStorage {
@@ -628,6 +649,15 @@ private:
     size_t maxCachedPages_;
     std::atomic<size_t> pageCacheHits_{0};
     std::atomic<size_t> pageCacheMisses_{0};
+    // 20260722_cache_stats_audit (port): hit/miss above are vector-level;
+    // these capture what actually happened at the I/O and write-buffer layers.
+    std::atomic<size_t> writeBufHits_{0};
+    std::atomic<size_t> pageLoads_{0};
+    std::atomic<size_t> batchCalls_{0};
+    std::atomic<size_t> batchIds_{0};
+    std::atomic<size_t> batchUniquePages_{0};
+    // Set once at open (before worker threads exist); read-only afterwards.
+    bool trackBatchStats_ = false;
 
     struct PageBuf {
         std::vector<char> data; // always kPageSize bytes
@@ -1002,6 +1032,7 @@ private:
         }
 
         // (2) pread WITHOUT cache lock — multiple thread misses parallelize.
+        pageLoads_.fetch_add(1, std::memory_order_relaxed);  // real 4 KB I/O
         PageBuf buf;
         buf.data.resize(kPageSize, 0);
 
@@ -1359,6 +1390,7 @@ public:
 
         // 0) Try unflushed write buffer first
         if (tryReadFromWriteBuf(pageId, slot, vec)) {
+            writeBufHits_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
 
@@ -1466,7 +1498,13 @@ public:
                               float* out, size_t dim) override {
         thread_local std::vector<MissEntry> miss_scratch;
         thread_local std::vector<size_t>    unique_page_scratch;
+        thread_local std::vector<size_t>    batch_page_scratch;
         miss_scratch.clear();
+        if (trackBatchStats_) {
+            batchCalls_.fetch_add(1, std::memory_order_relaxed);
+            batchIds_.fetch_add(ids.size(), std::memory_order_relaxed);
+            batch_page_scratch.clear();
+        }
 
         // Pass 1a: try write buffer first WITHOUT page_mu_, collect
         // remaining for the cache-hit pass below. Phase 6 lock order
@@ -1483,10 +1521,21 @@ public:
             size_t pageId = static_cast<size_t>(page);
             uint16_t slot = slot_of(id);
 
+            if (trackBatchStats_) batch_page_scratch.push_back(pageId);
             if (tryReadFromWriteBufFlat(pageId, slot, out + i * dim, dim_)) {
+                writeBufHits_.fetch_add(1, std::memory_order_relaxed);
                 continue;
             }
             miss_scratch.push_back({i, pageId, slot});
+        }
+
+        if (trackBatchStats_ && !batch_page_scratch.empty()) {
+            std::sort(batch_page_scratch.begin(), batch_page_scratch.end());
+            size_t distinct = 1;
+            for (size_t j = 1; j < batch_page_scratch.size(); ++j) {
+                if (batch_page_scratch[j] != batch_page_scratch[j - 1]) ++distinct;
+            }
+            batchUniquePages_.fetch_add(distinct, std::memory_order_relaxed);
         }
 
         if (miss_scratch.empty()) return;
@@ -1558,10 +1607,28 @@ public:
     }
 
     PageCacheStats getPageCacheStats() const override {
-        return PageCacheStats{
-            pageCacheHits_.load(std::memory_order_relaxed),
-            pageCacheMisses_.load(std::memory_order_relaxed)};
+        PageCacheStats s;
+        s.hits = pageCacheHits_.load(std::memory_order_relaxed);
+        s.misses = pageCacheMisses_.load(std::memory_order_relaxed);
+        s.write_buf_hits = writeBufHits_.load(std::memory_order_relaxed);
+        s.page_loads = pageLoads_.load(std::memory_order_relaxed);
+        s.batch_calls = batchCalls_.load(std::memory_order_relaxed);
+        s.batch_ids = batchIds_.load(std::memory_order_relaxed);
+        s.batch_unique_pages = batchUniquePages_.load(std::memory_order_relaxed);
+        return s;
     }
+
+    void resetPageCacheStats() override {
+        pageCacheHits_.store(0, std::memory_order_relaxed);
+        pageCacheMisses_.store(0, std::memory_order_relaxed);
+        writeBufHits_.store(0, std::memory_order_relaxed);
+        pageLoads_.store(0, std::memory_order_relaxed);
+        batchCalls_.store(0, std::memory_order_relaxed);
+        batchIds_.store(0, std::memory_order_relaxed);
+        batchUniquePages_.store(0, std::memory_order_relaxed);
+    }
+
+    void setStatsTracking(bool enabled) override { trackBatchStats_ = enabled; }
 
     bool serializeMetadata(std::ostream& out) const {
         // v1: original (totalVectors, pages, sections, idToPage, idToSlotInPage)
@@ -1800,8 +1867,7 @@ public:
             pageCache_.clear();
             pageOrder_.clear();
         }
-        pageCacheHits_.store(0, std::memory_order_relaxed);
-        pageCacheMisses_.store(0, std::memory_order_relaxed);
+        resetPageCacheStats();
 
         return static_cast<bool>(in);
     }

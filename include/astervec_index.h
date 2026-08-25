@@ -329,6 +329,7 @@ namespace astervec
 
         void printIndexStatus() const;
         void printStatistics() const;
+        void resetStatistics();
         void printState() const;
         void close();
 

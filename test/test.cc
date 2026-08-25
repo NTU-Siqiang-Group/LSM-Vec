@@ -61,12 +61,21 @@ int main(int argc, char* argv[])
     //     std::cerr << "Get failed for id 0: " << get_status.ToString() << std::endl;
     // }
 
+    // Phase-separated stats: print build-phase counters, then reset so the
+    // final print below reflects the query phase only.
+    if (options.enable_stats && !config.skip_insert) {
+        std::cout << "========== Build-phase statistics ==========" << std::endl;
+        db->printStatistics();
+        db->resetStatistics();
+        std::cout << "=============================================" << std::endl;
+    }
+
     std::cout << "Querying and comparing with ground truth " << config.query_file_path << std::endl;
     queryAndCompareWithGroundTruth(*db, config.query_file_path, config.groundtruth_file_path, config.k, config.ef_search);
     if(options.enable_stats){
-        std::cout << "---------------------------------" << std::endl;
+        std::cout << "========== Query-phase statistics ==========" << std::endl;
         db->printStatistics();
-        std::cout << "---------------------------------" << std::endl;
+        std::cout << "=============================================" << std::endl;
     }
 
     // Close cleanly so index metadata is persisted and a later --skip-insert

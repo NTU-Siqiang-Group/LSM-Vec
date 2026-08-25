@@ -374,6 +374,10 @@ PYBIND11_MODULE(astervec, m)
              [](astervec::AsterVecDB& db) { db.trimMemory(); },
              "Ask the allocator to return idle heap memory to the OS "
              "(glibc malloc_trim; no-op elsewhere).")
+        .def("reset_statistics",
+             [](astervec::AsterVecDB& db) { db.resetStatistics(); },
+             "Reset accumulated statistics counters (index + storage), so "
+             "per-phase stats can be reported separately.")
         .def("delete_stats",
              [](const astervec::AsterVecDB& db) -> py::dict {
                  astervec::AsterVecDB::DeleteStats s = db.GetDeleteStats();

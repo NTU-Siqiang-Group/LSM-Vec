@@ -645,6 +645,11 @@ void AsterVecDB::printStatistics() const
     index_->printStatistics();
 }
 
+void AsterVecDB::resetStatistics()
+{
+    index_->resetStatistics();
+}
+
 Status AsterVecDB::BulkBuild(Span<const float> vectors, int n,
                            const BulkBuildOptions& opts)
 {

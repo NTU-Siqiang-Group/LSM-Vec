@@ -117,6 +117,10 @@ using namespace ROCKSDB_NAMESPACE;
             );
         }
 
+        // Batch-locality accounting costs a small per-batch sort, so it is
+        // only armed when stats are requested.
+        vector_storage_->setStatsTracking(db_options_.enable_stats);
+
         // Adaptive section layer: find smallest k such that M^k >= vectorsPerPage
         {
             size_t vpp = 1;
@@ -1849,10 +1853,26 @@ using namespace ROCKSDB_NAMESPACE;
                                      std::memory_order_relaxed);
         stats.page_cache_misses.store(cache_stats.misses,
                                        std::memory_order_relaxed);
+        stats.write_buf_hits.store(cache_stats.write_buf_hits,
+                                   std::memory_order_relaxed);
+        stats.page_loads.store(cache_stats.page_loads,
+                               std::memory_order_relaxed);
+        stats.batch_calls.store(cache_stats.batch_calls,
+                                std::memory_order_relaxed);
+        stats.batch_ids.store(cache_stats.batch_ids,
+                              std::memory_order_relaxed);
+        stats.batch_unique_pages.store(cache_stats.batch_unique_pages,
+                                       std::memory_order_relaxed);
 
         std::ostringstream oss;
         stats.print(oss);
         LOG(INFO) << oss.str();
+    }
+
+    void AsterVec::resetStatistics()
+    {
+        stats.reset();
+        vector_storage_->resetPageCacheStats();
     }
 
     void AsterVec::close()

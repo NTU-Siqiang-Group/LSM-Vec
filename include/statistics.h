@@ -76,6 +76,11 @@ public:
 
         page_cache_hits.store(0, std::memory_order_relaxed);
         page_cache_misses.store(0, std::memory_order_relaxed);
+        write_buf_hits.store(0, std::memory_order_relaxed);
+        page_loads.store(0, std::memory_order_relaxed);
+        batch_calls.store(0, std::memory_order_relaxed);
+        batch_ids.store(0, std::memory_order_relaxed);
+        batch_unique_pages.store(0, std::memory_order_relaxed);
 
         metadata_gets.store(0, std::memory_order_relaxed);
         metadata_cache_hits.store(0, std::memory_order_relaxed);
@@ -166,9 +171,16 @@ public:
     std::atomic<std::size_t> vec_write_count{0};
     std::atomic<uint64_t>    vec_write_time{0};
 
-    // Page-based vector storage cache stats
+    // Page-based vector storage cache stats.
+    // hits/misses are VECTOR-level lookups; several misses in one batch can
+    // map to the same page, so misses is NOT the I/O count — page_loads is.
     std::atomic<std::size_t> page_cache_hits{0};
     std::atomic<std::size_t> page_cache_misses{0};
+    std::atomic<std::size_t> write_buf_hits{0};     // served from unflushed write buffers
+    std::atomic<std::size_t> page_loads{0};         // actual 4 KB page reads (real I/O)
+    std::atomic<std::size_t> batch_calls{0};        // batch-read invocations
+    std::atomic<std::size_t> batch_ids{0};          // ids requested across batches
+    std::atomic<std::size_t> batch_unique_pages{0}; // distinct pages per batch, summed
 
     // Metadata filtering counters
     std::atomic<std::size_t> metadata_gets{0};
@@ -227,12 +239,31 @@ public:
            << ", Time: " << seconds(vec_write_time) << " seconds\n";
         std::size_t hits = count(page_cache_hits);
         std::size_t misses = count(page_cache_misses);
-        if (hits + misses > 0) {
-            std::size_t total = hits + misses;
-            double hit_rate = 100.0 * static_cast<double>(hits) /
-                              static_cast<double>(total);
-            os << "Page Cache Avoided I/O: " << hits << "\n";
-            os << "Page Cache Hit Rate: " << hit_rate << "%\n";
+        std::size_t wbuf = count(write_buf_hits);
+        if (hits + misses + wbuf > 0) {
+            std::size_t lookups = hits + misses + wbuf;
+            double vec_hit_rate = 100.0 * static_cast<double>(hits + wbuf) /
+                                  static_cast<double>(lookups);
+            os << "Vector lookups: " << lookups
+               << " (cache hits " << hits
+               << ", write-buf hits " << wbuf
+               << ", misses " << misses << ")\n";
+            os << "Vector-level Hit Rate: " << vec_hit_rate << "%\n";
+            os << "Page Loads (actual 4KB I/O): " << count(page_loads) << "\n";
+            os << "I/O per vector lookup: "
+               << static_cast<double>(count(page_loads)) /
+                  static_cast<double>(lookups) << "\n";
+        }
+        std::size_t bc = count(batch_calls);
+        if (bc > 0) {
+            std::size_t bi = count(batch_ids);
+            std::size_t bp = count(batch_unique_pages);
+            os << "Batch reads: " << bc << " calls, " << bi << " ids, "
+               << bp << " unique pages\n";
+            os << "  avg ids/batch: " << static_cast<double>(bi) / bc
+               << ", avg unique pages/batch: " << static_cast<double>(bp) / bc
+               << ", co-location factor (ids/page): "
+               << (bp ? static_cast<double>(bi) / bp : 0.0) << "\n";
         }
 
         std::size_t mg = count(metadata_gets);

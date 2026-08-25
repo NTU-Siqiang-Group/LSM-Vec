@@ -158,6 +158,10 @@ public:
                      const BulkBuildOptions& opts);
 
     void printStatistics() const;
+
+    // Reset accumulated statistics counters (index + storage). Lets a
+    // benchmark harness report build-phase and query-phase stats separately.
+    void resetStatistics();
     void flushVectorWrites();
 
     // 20260516_malloc_trim: ask the allocator to return idle heap memory to
