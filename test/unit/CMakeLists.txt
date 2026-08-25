@@ -23,6 +23,7 @@ add_executable(astervec_unit_tests
     test_delete_robust_red.cc
     test_delete_persistence.cc
     test_delete_stress.cc
+    test_edge_cache_arena.cc
     test_concurrent_search.cc
     test_bulk_build.cc
     # A1.7 Phase 0 torture tests (test_quiesce_backup.cc intentionally

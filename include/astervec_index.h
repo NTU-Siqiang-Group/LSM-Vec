@@ -97,7 +97,9 @@ namespace astervec
 
         explicit EdgeLRUCache(size_t capacity)
             : capacity_(capacity),
-              per_shard_capacity_(std::max<size_t>(1, capacity / kNumShards)) {}
+              per_shard_capacity_(std::max<size_t>(1, capacity / kNumShards)) {
+            for (auto& s : shards_) s.init(per_shard_capacity_);
+        }
 
         // Returns true and writes the cached neighbour list into *out
         // when present. Returns false on miss; *out is unchanged in
@@ -105,45 +107,61 @@ namespace astervec
         bool get(node_id_t id, std::vector<node_id_t>* out) {
             Shard& s = shard_for(id);
             std::lock_guard<std::mutex> lock(s.mu);
-            auto it = s.map.find(id);
-            if (it == s.map.end()) {
+            uint32_t slot = s.find(id);
+            if (slot == kInvalid) {
                 misses_.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
             hits_.fetch_add(1, std::memory_order_relaxed);
-            // Drop-on-hit: no splice. Just copy and return.
-            *out = it->second->second;
+            // Drop-on-hit: no reorder. Just copy and return.
+            *out = s.slots[slot].neighbors;
             return true;
         }
 
         void put(node_id_t id, std::vector<node_id_t> neighbors) {
             Shard& s = shard_for(id);
             std::lock_guard<std::mutex> lock(s.mu);
-            auto it = s.map.find(id);
-            if (it != s.map.end()) {
-                it->second->second = std::move(neighbors);
-                // Splice to front so this entry is treated as freshly
+            uint32_t slot = s.find(id);
+            if (slot != kInvalid) {
+                s.slots[slot].neighbors = std::move(neighbors);
+                // Move to front so this entry is treated as freshly
                 // inserted (only place we mutate LRU order).
-                s.list.splice(s.list.begin(), s.list, it->second);
+                s.move_to_front(slot);
                 return;
             }
-            if (s.map.size() >= per_shard_capacity_) {
-                auto& back = s.list.back();
-                s.map.erase(back.first);
-                s.list.pop_back();
+            if (s.count >= s.cap) {
+                // Evict the tail and reuse its slot in place.
+                slot = s.tail;
+                s.herase(s.slots[slot].key);
+                s.unlink(slot);
+                --s.count;
                 evictions_.fetch_add(1, std::memory_order_relaxed);
+            } else if (s.free_head != kInvalid) {
+                slot = s.free_head;
+                s.free_head = s.slots[slot].next;
+                s.slots[slot].next = kInvalid;
+            } else {
+                slot = static_cast<uint32_t>(s.slots.size());
+                s.slots.emplace_back();
             }
-            s.list.emplace_front(id, std::move(neighbors));
-            s.map[id] = s.list.begin();
+            s.slots[slot].key = id;
+            s.slots[slot].neighbors = std::move(neighbors);
+            s.link_front(slot);
+            s.hinsert(id, slot);
+            ++s.count;
         }
 
         void erase(node_id_t id) {
             Shard& s = shard_for(id);
             std::lock_guard<std::mutex> lock(s.mu);
-            auto it = s.map.find(id);
-            if (it == s.map.end()) return;
-            s.list.erase(it->second);
-            s.map.erase(it);
+            uint32_t slot = s.find(id);
+            if (slot == kInvalid) return;
+            s.unlink(slot);
+            s.herase(id);
+            --s.count;
+            s.slots[slot].neighbors.clear();
+            s.slots[slot].next = s.free_head;
+            s.free_head = slot;
             invalidations_.fetch_add(1, std::memory_order_relaxed);
         }
 
@@ -154,12 +172,120 @@ namespace astervec
         size_t capacity() const { return capacity_; }
 
     private:
-        using Entry = std::pair<node_id_t, std::vector<node_id_t>>;
+        static constexpr uint32_t kInvalid = 0xFFFFFFFFu;
+
+        struct Slot {
+            node_id_t key = 0;
+            std::vector<node_id_t> neighbors;
+            uint32_t prev = kInvalid;
+            uint32_t next = kInvalid;
+        };
+
+        // Port of opt-branch cycles #26+#66: per-shard slot arena with
+        // intrusive LRU links + a fixed-capacity open-addressing id->slot
+        // table (fibonacci hash, linear probe, backward-shift deletion).
+        // Shard capacity is fixed at init, so the table is sized once
+        // (pow2, load <= 0.5) and never rehashes; two flat arrays replace
+        // per-entry heap-allocated list/hash nodes and their alloc/free
+        // churn on the eviction path (one erase+insert per miss).
+        // Eviction ORDER is identical to the previous list+map shard, so
+        // hit/miss sequences are bit-identical.
         struct Shard {
-            mutable std::mutex                                  mu;
-            std::list<Entry>                                    list;
-            std::unordered_map<node_id_t,
-                               std::list<Entry>::iterator>      map;
+            mutable std::mutex mu;
+            std::vector<Slot> slots;
+            std::vector<node_id_t> hkeys;   // flat probe table: keys
+            std::vector<uint32_t>  hvals;   // flat probe table: slot indices
+            size_t hmask = 0;
+            size_t cap = 0;
+            size_t count = 0;
+            uint32_t head = kInvalid;
+            uint32_t tail = kInvalid;
+            uint32_t free_head = kInvalid;
+
+            void init(size_t capacity) {
+                cap = capacity;
+                slots.reserve(capacity);
+                size_t want = capacity < 8 ? 16 : capacity * 2;
+                size_t hcap = 1;
+                while (hcap < want) hcap <<= 1;
+                hmask = hcap - 1;
+                hkeys.assign(hcap, k_invalid_node_id);
+                hvals.assign(hcap, 0);
+            }
+
+            size_t hhash(node_id_t id) const {
+                // Fibonacci multiply-shift; ids are near-sequential, this
+                // spreads them while keeping probes short.
+                return static_cast<size_t>(
+                           (static_cast<uint64_t>(id) *
+                            0x9E3779B97F4A7C15ULL) >> 32) & hmask;
+            }
+
+            uint32_t find(node_id_t id) const {
+                size_t i = hhash(id);
+                while (hkeys[i] != k_invalid_node_id) {
+                    if (hkeys[i] == id) return hvals[i];
+                    i = (i + 1) & hmask;
+                }
+                return kInvalid;
+            }
+
+            void hinsert(node_id_t id, uint32_t val) {
+                size_t i = hhash(id);
+                while (hkeys[i] != k_invalid_node_id) {
+                    if (hkeys[i] == id) { hvals[i] = val; return; }
+                    i = (i + 1) & hmask;
+                }
+                hkeys[i] = id;
+                hvals[i] = val;
+            }
+
+            // Backward-shift deletion keeps probe chains tombstone-free so
+            // lookup cost stays flat under eviction churn.
+            void herase(node_id_t id) {
+                size_t i = hhash(id);
+                while (hkeys[i] != k_invalid_node_id && hkeys[i] != id) {
+                    i = (i + 1) & hmask;
+                }
+                if (hkeys[i] == k_invalid_node_id) return;
+                size_t j = i;
+                while (true) {
+                    j = (j + 1) & hmask;
+                    if (hkeys[j] == k_invalid_node_id) break;
+                    size_t home = hhash(hkeys[j]);
+                    // Move j's entry into the hole at i only if its home
+                    // position does not lie cyclically inside (i, j].
+                    if (((j - home) & hmask) >= ((j - i) & hmask)) {
+                        hkeys[i] = hkeys[j];
+                        hvals[i] = hvals[j];
+                        i = j;
+                    }
+                }
+                hkeys[i] = k_invalid_node_id;
+            }
+
+            void link_front(uint32_t slot) {
+                slots[slot].prev = kInvalid;
+                slots[slot].next = head;
+                if (head != kInvalid) slots[head].prev = slot;
+                head = slot;
+                if (tail == kInvalid) tail = slot;
+            }
+
+            void unlink(uint32_t slot) {
+                uint32_t p = slots[slot].prev;
+                uint32_t n = slots[slot].next;
+                if (p != kInvalid) slots[p].next = n; else head = n;
+                if (n != kInvalid) slots[n].prev = p; else tail = p;
+                slots[slot].prev = kInvalid;
+                slots[slot].next = kInvalid;
+            }
+
+            void move_to_front(uint32_t slot) {
+                if (head == slot) return;
+                unlink(slot);
+                link_front(slot);
+            }
         };
 
         Shard& shard_for(node_id_t id) {
