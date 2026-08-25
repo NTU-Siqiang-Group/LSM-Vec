@@ -485,6 +485,12 @@ private:
         std::unordered_map<int, std::vector<size_t>>                    openPages;
         std::unordered_map<int, std::vector<std::pair<size_t,uint16_t>>> freeSlots;
         std::unordered_map<int, SectionWriteBuf>                        writeBufs;  // sectionIdx -> buf
+        // 20260722_write_buf_cap (port of opt-branch #62/#63): FIFO of
+        // buffer creations (may hold stale idx erased by page-full flush)
+        // and a pool of recycled 4 KB allocations, both per shard so cap
+        // eviction never crosses a shard lock.
+        std::deque<int>                                                 bufOrder;
+        std::vector<std::vector<char>>                                  bufPool;
     };
     mutable std::array<SectionShard, kNumSectionShards> sectionShards_;
     // Phase 5 (concurrent-writer-refactor-plan §5.3 / §5.4): upgraded
@@ -715,6 +721,11 @@ private:
     // shard mutex when no writer has buffered anything yet.
     std::atomic<size_t>                      sectionWriteBufsCount_{0};
     int writeFd_ = -1;  // file descriptor for pwrite-based writes
+    // 20260722_write_buf_cap: bound live section write buffers (total across
+    // shards; each shard enforces cap/kNumSectionShards). 0 = unlimited
+    // (legacy). Unbounded buffers scale with live-section count and were
+    // the largest unaccounted VmHWM slice on the opt branch.
+    size_t writeBufCap_ = 8192;
 
     // SQ8 quantize: float32[dim] → [min(4B), max(4B), uint8[dim]]
     static void quantize(const float* vec, size_t dim, char* record) {
@@ -912,7 +923,14 @@ private:
     // writeToSectionBuffer are called sequentially for the same section
     // (in storeVectorToDisk), so combining the lock doesn't worsen
     // serialisation for same-section traffic.
-    void writeToSectionBuffer(int sectionIdx, size_t pageId, uint16_t slot,
+    // Returns false when the write CANNOT safely go through the section
+    // buffer: the buffer doesn't hold this page and the write starts
+    // mid-page (slot != 0). That happens after a cap eviction (or reopen)
+    // partially flushed the page — a fresh zeroed buffer would clobber the
+    // earlier on-disk slots on its next flush. The caller must then write
+    // the record directly. (Port of opt-branch writeSlotSafely, folded
+    // inside the shard lock so the check-and-act is atomic.)
+    bool writeToSectionBuffer(int sectionIdx, size_t pageId, uint16_t slot,
                               const std::vector<float>& vec) {
         // Lock-order rule:
         //   shard.mu is acquired BELOW; page_mu_ (via
@@ -925,16 +943,56 @@ private:
             std::lock_guard<std::mutex> g(shard.mu);
 
             auto it = shard.writeBufs.find(sectionIdx);
+            bool holdsPage = (it != shard.writeBufs.end() &&
+                              it->second.pageId == pageId);
+            if (!holdsPage && slot != 0) {
+                return false;   // mid-page first-touch: direct write instead
+            }
             if (it == shard.writeBufs.end()) {
                 SectionWriteBuf swb;
                 swb.pageId = pageId;
-                swb.data.resize(kPageSize, 0);
+                if (!shard.bufPool.empty()) {
+                    // Recycle an evicted buffer's allocation: with a cap
+                    // this keeps buffer memory a fixed pool instead of
+                    // alloc/free churn that fragments the arena.
+                    swb.data = std::move(shard.bufPool.back());
+                    shard.bufPool.pop_back();
+                    std::fill(swb.data.begin(), swb.data.end(), 0);
+                } else {
+                    swb.data.resize(kPageSize, 0);
+                }
                 it = shard.writeBufs.emplace(sectionIdx, std::move(swb)).first;
                 sectionWriteBufsCount_.fetch_add(1, std::memory_order_relaxed);
+                if (writeBufCap_ > 0) {
+                    shard.bufOrder.push_back(sectionIdx);
+                    size_t perShardCap =
+                        std::max<size_t>(1, writeBufCap_ / kNumSectionShards);
+                    // Evict oldest live buffers over the cap (skip stale idx
+                    // erased earlier on page-full flush). unordered_map::erase
+                    // of another key never invalidates 'it'.
+                    while (shard.writeBufs.size() > perShardCap &&
+                           !shard.bufOrder.empty()) {
+                        int victim = shard.bufOrder.front();
+                        shard.bufOrder.pop_front();
+                        if (victim == sectionIdx) {  // self: re-queue
+                            shard.bufOrder.push_back(victim);
+                            continue;
+                        }
+                        auto vit = shard.writeBufs.find(victim);
+                        if (vit == shard.writeBufs.end()) continue;  // stale
+                        flushSectionWriteBuf(vit->second);
+                        if (shard.bufPool.size() < perShardCap) {
+                            shard.bufPool.push_back(std::move(vit->second.data));
+                        }
+                        shard.writeBufs.erase(vit);
+                        sectionWriteBufsCount_.fetch_sub(1, std::memory_order_relaxed);
+                    }
+                }
             }
 
             auto& swb = it->second;
             // If the section moved to a new page, flush the old page first
+            // (slot == 0 here — the mid-page case bailed out above).
             if (swb.pageId != pageId) {
                 flushSectionWriteBuf(swb);
                 swb.pageId = pageId;
@@ -957,6 +1015,7 @@ private:
         // inversion noted above. updateCacheAfterWrite takes page_mu_
         // exclusive on its own.
         updateCacheAfterWrite(pageId, slot, vec);
+        return true;
     }
 
     // Look up pages_[pageId].sectionIdx safely under pages_alloc_mu_.
@@ -1293,7 +1352,8 @@ public:
     PagedVectorStorage(const std::string& path,
                   size_t dim,
                   size_t capacity = 1000000,
-                  size_t maxCachedPages = 128)
+                  size_t maxCachedPages = 128,
+                  size_t writeBufCap = 8192)
         : filePath_(path),
           deleteFilePath_(path + ".deleted"),
           dim_(dim),
@@ -1303,6 +1363,7 @@ public:
           vectorsPerPage_(0),
           maxCachedPages_(maxCachedPages)
     {
+        writeBufCap_ = writeBufCap;
         if (dim_ == 0) {
             throw std::runtime_error("Vector dimension must be > 0.");
         }
@@ -1355,6 +1416,9 @@ public:
                 flushSectionWriteBuf(swb);
             }
             shard.writeBufs.clear();
+            shard.bufOrder.clear();
+            shard.bufPool.clear();
+            shard.bufPool.shrink_to_fit();
         }
         sectionWriteBufsCount_.store(0, std::memory_order_relaxed);
     }
@@ -1394,7 +1458,13 @@ public:
         // observe page_of(id) >= 0 are guaranteed to find durable bytes
         // (either in the section write buffer or on disk).
         if (sectionIdx >= 0 && writeFd_ >= 0) {
-            writeToSectionBuffer(sectionIdx, pageId, slot, vec);
+            if (!writeToSectionBuffer(sectionIdx, pageId, slot, vec)) {
+                // Mid-page first-touch after a cap eviction/reopen: the
+                // section buffer path would clobber earlier slots; write
+                // the record directly instead.
+                writeRecord(pageId, slot, vec);
+                updateCacheAfterWrite(pageId, slot, vec);
+            }
         } else {
             writeRecord(pageId, slot, vec);
             updateCacheAfterWrite(pageId, slot, vec);
@@ -1834,6 +1904,9 @@ public:
             std::lock_guard<std::mutex> g(s.mu);
             s.openPages.clear();
             s.freeSlots.clear();
+            s.writeBufs.clear();
+            s.bufOrder.clear();
+            s.bufPool.clear();
         }
 
         std::vector<std::vector<uint8_t>> usedSlots;

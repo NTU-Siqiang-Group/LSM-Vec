@@ -106,7 +106,8 @@ using namespace ROCKSDB_NAMESPACE;
                 db_options_.vector_file_path,
                 static_cast<size_t>(vector_dim_),
                 db_options_.vec_file_capacity,
-                db_options_.paged_max_cached_pages
+                db_options_.paged_max_cached_pages,
+                db_options_.write_buf_cap
             );
         } else {
             LOG(INFO) << "Using plain vector storage layout";

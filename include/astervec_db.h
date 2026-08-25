@@ -85,6 +85,9 @@ struct AsterVecDBOptions {
     int ef_search = 128;
     size_t edge_cache_size = 100000;
     size_t block_cache_bytes = 32 * 1024 * 1024;
+    // Bound on live section write buffers (4 KB each; flush-on-evict FIFO).
+    // 0 = unlimited (legacy). Default 8192 = 32 MB pooled bound.
+    size_t write_buf_cap = 8192;
     std::string vector_file_path;
     std::string log_file_path;
 };
