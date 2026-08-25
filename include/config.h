@@ -22,6 +22,7 @@ struct Config {
     int k = 1;
     int ef_search = 128;
     bool reinit = true;
+    bool skip_insert = false;   // reuse a built index (implies reinit=0)
 
     size_t edge_cache_size = 100000;
     int vector_storage_type = 1; // 0 for basic, 1 for paged
@@ -127,6 +128,9 @@ Short aliases:
             if (k == "reinit") {
                 kv[k] = "1";
             }
+            if (k == "skip-insert") {
+                kv[k] = "1";
+            }
             if (k == "batch-read") {
                 kv[k] = "1";
             }
@@ -184,6 +188,8 @@ Short aliases:
         if (kv.count("edge-policy"))        cfg_.edge_update_policy = kv["edge-policy"];
         if (kv.count("stats"))              cfg_.enable_stats = (kv["stats"] != "0");
         if (kv.count("reinit"))             cfg_.reinit = (kv["reinit"] != "0");
+        if (kv.count("skip-insert"))      { cfg_.skip_insert = (kv["skip-insert"] != "0");
+                                            if (cfg_.skip_insert) cfg_.reinit = false; }
         if (kv.count("batch-read"))         cfg_.enable_batch_read = (kv["batch-read"] != "0");
 
         if (kv.count("M"))                  cfg_.M = parseI(kv["M"]);

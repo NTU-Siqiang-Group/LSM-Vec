@@ -44,9 +44,15 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    std::cout << "Inserting nodes from " << config.input_file_path << std::endl;
-    insertFromFile(*db, config.input_file_path);
-    db->flushVectorWrites();
+    if (config.skip_insert) {
+        // Reuse an already-built index (--skip-insert forces reinit=0): a
+        // multi-arm sweep shares ONE graph instead of rebuilding per arm.
+        std::cout << "Skipping insert; querying the existing index" << std::endl;
+    } else {
+        std::cout << "Inserting nodes from " << config.input_file_path << std::endl;
+        insertFromFile(*db, config.input_file_path);
+        db->flushVectorWrites();
+    }
     // std::vector<float> first_vec;
     // auto get_status = db->Get(0, &first_vec);
     // if (get_status.ok()) {
@@ -63,9 +69,14 @@ int main(int argc, char* argv[])
         std::cout << "---------------------------------" << std::endl;
     }
 
+    // Close cleanly so index metadata is persisted and a later --skip-insert
+    // run can reopen this DB. (Previously `return 0;` sat here, making the
+    // close/reopen block below unreachable — the harness never exercised
+    // persistence.)
+    db->Close();
     return 0;
-    
-    // This part is for testing close and reopen of AsterVecDB 
+
+    // This part is for testing close and reopen of AsterVecDB
     db->Close();
     db.reset();
     options.reinit = false;
