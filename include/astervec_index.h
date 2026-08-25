@@ -1,6 +1,8 @@
 #pragma once
 #include <array>
 #include <atomic>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
@@ -113,8 +115,8 @@ namespace astervec
                 return false;
             }
             hits_.fetch_add(1, std::memory_order_relaxed);
-            // Drop-on-hit: no reorder. Just copy and return.
-            *out = s.slots[slot].neighbors;
+            // Drop-on-hit: no reorder. Decode and return.
+            decodeInto(s.slots[slot].enc, out);
             return true;
         }
 
@@ -123,7 +125,7 @@ namespace astervec
             std::lock_guard<std::mutex> lock(s.mu);
             uint32_t slot = s.find(id);
             if (slot != kInvalid) {
-                s.slots[slot].neighbors = std::move(neighbors);
+                encodeInto(neighbors, s.slots[slot].enc);
                 // Move to front so this entry is treated as freshly
                 // inserted (only place we mutate LRU order).
                 s.move_to_front(slot);
@@ -145,7 +147,7 @@ namespace astervec
                 s.slots.emplace_back();
             }
             s.slots[slot].key = id;
-            s.slots[slot].neighbors = std::move(neighbors);
+            encodeInto(neighbors, s.slots[slot].enc);
             s.link_front(slot);
             s.hinsert(id, slot);
             ++s.count;
@@ -159,7 +161,7 @@ namespace astervec
             s.unlink(slot);
             s.herase(id);
             --s.count;
-            s.slots[slot].neighbors.clear();
+            s.slots[slot].enc.clear();
             s.slots[slot].next = s.free_head;
             s.free_head = slot;
             invalidations_.fetch_add(1, std::memory_order_relaxed);
@@ -176,10 +178,67 @@ namespace astervec
 
         struct Slot {
             node_id_t key = 0;
-            std::vector<node_id_t> neighbors;
+            // Adjacency, LEB128-varint-encoded by default (~3 B/id instead
+            // of 8 B): ids are near-sequential so most encode in 3-4 bytes.
+            // ASTERVEC_EDGE_CACHE_VARINT=0 stores raw 8-byte ids instead
+            // (bake-in kill switch). Encoding is process-wide and latched.
+            std::vector<uint8_t> enc;
             uint32_t prev = kInvalid;
             uint32_t next = kInvalid;
         };
+
+        static bool varintEnabled() {
+            static const bool v = [] {
+                const char* e = std::getenv("ASTERVEC_EDGE_CACHE_VARINT");
+                return !(e && e[0] == '0');
+            }();
+            return v;
+        }
+
+        static void encodeInto(const std::vector<node_id_t>& ids,
+                               std::vector<uint8_t>& enc) {
+            enc.clear();
+            if (varintEnabled()) {
+                enc.reserve(ids.size() * 3);
+                for (node_id_t id : ids) {
+                    uint64_t v = static_cast<uint64_t>(id);
+                    while (v >= 0x80) {
+                        enc.push_back(static_cast<uint8_t>(v) | 0x80);
+                        v >>= 7;
+                    }
+                    enc.push_back(static_cast<uint8_t>(v));
+                }
+            } else {
+                enc.resize(ids.size() * sizeof(node_id_t));
+                if (!ids.empty())
+                    std::memcpy(enc.data(), ids.data(), enc.size());
+            }
+        }
+
+        static void decodeInto(const std::vector<uint8_t>& enc,
+                               std::vector<node_id_t>* out) {
+            out->clear();
+            if (varintEnabled()) {
+                const uint8_t* p = enc.data();
+                const uint8_t* end = p + enc.size();
+                while (p < end) {
+                    uint64_t v = 0;
+                    int shift = 0;
+                    while (*p & 0x80) {
+                        v |= static_cast<uint64_t>(*p & 0x7F) << shift;
+                        shift += 7;
+                        ++p;
+                    }
+                    v |= static_cast<uint64_t>(*p) << shift;
+                    ++p;
+                    out->push_back(static_cast<node_id_t>(v));
+                }
+            } else {
+                out->resize(enc.size() / sizeof(node_id_t));
+                if (!enc.empty())
+                    std::memcpy(out->data(), enc.data(), enc.size());
+            }
+        }
 
         // Port of opt-branch cycles #26+#66: per-shard slot arena with
         // intrusive LRU links + a fixed-capacity open-addressing id->slot

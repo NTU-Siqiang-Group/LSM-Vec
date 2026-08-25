@@ -12,6 +12,7 @@
 #include "astervec_index.h"
 
 #include <deque>
+#include <limits>
 #include <random>
 #include <unordered_map>
 #include <vector>
@@ -147,4 +148,30 @@ TEST_CASE("EdgeLRUCache tiny capacity edge cases") {
     cache.put(1, {12});
     cache.put(1 + 64 * 7, {13});  // may land in another shard; both live
     REQUIRE(cache.get(1, &out));
+}
+
+TEST_CASE("EdgeLRUCache round-trips huge and bit-63 ids (varint width)") {
+    // LEB128 must round-trip the full uint64 range, including indirect ids
+    // with bit 63 set (10-byte encodings) — both as keys and as neighbors.
+    astervec::EdgeLRUCache cache(256);
+    const astervec::node_id_t kBit63 = (astervec::node_id_t{1} << 63);
+    std::vector<astervec::node_id_t> payload = {
+        0, 1, 127, 128, 16383, 16384,
+        kBit63, kBit63 | 12345,
+        std::numeric_limits<astervec::node_id_t>::max() - 1,
+    };
+    std::vector<astervec::node_id_t> out;
+
+    cache.put(kBit63 | 42, payload);
+    REQUIRE(cache.get(kBit63 | 42, &out));
+    REQUIRE(out == payload);
+
+    cache.put(7, payload);
+    REQUIRE(cache.get(7, &out));
+    REQUIRE(out == payload);
+
+    cache.erase(kBit63 | 42);
+    REQUIRE_FALSE(cache.get(kBit63 | 42, &out));
+    REQUIRE(cache.get(7, &out));
+    REQUIRE(out == payload);
 }
