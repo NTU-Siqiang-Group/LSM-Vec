@@ -4,9 +4,27 @@ All notable changes to AsterVec are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [0.2.1]
+## [0.2.1] - 2026-08-26
 
-Packaging and distribution release — no engine changes.
+Packaging, performance, and reliability release.
+
+### Fixed
+- **Update-path data corruption**: updating a vector whose page buffer had
+  already been flushed created a zero-filled write buffer holding one slot;
+  its next full-page flush silently wiped every other vector on that 4 KB
+  page. Update-heavy (churn) workloads were affected — recall under a
+  sustained insert/update/delete benchmark improves from ~0.95 to ~0.99 at
+  100K and ~0.93 to ~0.96 at 1M with the fix. Indexes that received updates
+  or deletes with earlier versions may contain zeroed co-paged vectors;
+  rebuilding from source embeddings fully repairs them.
+
+### Changed
+- **Performance:** internal cache and search-path rework (edge-cache slot
+  arena + open-addressed table, varint-encoded cached adjacency, flat
+  direct-mapped page-cache index, bounded pooled write buffers, dense
+  visited tracking). Measured on SIFT-1M at default settings: query
+  throughput +28%, insert throughput +27% (+40% under churn), with recall
+  unchanged; steady-state RSS down ~10-20 MB.
 
 ### Added
 - **Prebuilt Linux aarch64 wheels** — `pip install aster-vec` now works in Docker
@@ -15,12 +33,14 @@ Packaging and distribution release — no engine changes.
 - **CI** — unit-test workflow on Linux and macOS runs on every push and PR.
 - README: CI / PyPI / Python-version / license badges; the quick start now
   installs with a single `pip install aster-vec`.
-- New `AsterVecDBOptions` tunables: `edge_cache_size` (now exposed to Python)
-  and `block_cache_bytes` (previously hardcoded at 32 MB).
+- New `AsterVecDBOptions` tunables: `edge_cache_size` (now exposed to Python),
+  `block_cache_bytes` (previously hardcoded at 32 MB), and `write_buf_cap`
+  (bounds live section write buffers; default 8192 = 32 MB pooled).
+- `reset_statistics()` API (C++/Python) for phase-separated stats reporting.
 - `docs/TROUBLESHOOTING.md` — install/build/runtime fixes collected in one
   place (moved out of the README).
 
-### Fixed
+### Fixed (packaging)
 - PyPI project page: the logo renders again (absolute image URL) and the sidebar
   links to Documentation, Changelog, and Issues.
 - macOS wheels statically link a source-built zstd, so the wheel's minimum
