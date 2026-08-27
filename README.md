@@ -7,8 +7,9 @@
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick Start</a> ·
   <a href="#why-astervec">Why</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#performance">Performance</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#documentation">Docs</a>
 </p>
@@ -26,18 +27,19 @@ structure and caches, so an application can search millions of embeddings
 within a few hundred MB of memory. It is built for local AI agents and
 desktop RAG.
 
-At the heart of AsterVec is one architectural decision: **on disk, the
-graph and the vectors are stored separately**, because the two parts are
-updated and accessed in essentially different patterns.
+## Why AsterVec
 
-- **Graph** — edges churn in small, scattered writes, so they live in
-  [Aster](https://github.com/NTU-Siqiang-Group/Aster), a graph-oriented
-  LSM-tree that absorbs them out of place.
-- **Vectors** — they rarely change once written, so they live in packed
-  pages built for bulk reads.
-
-Keeping the two apart is what makes updates cheap: a graph change writes
-only edges and never touches a vector page.
+- **Minimize your memory usage.** Other vector engines are designed
+  around RAM and take as much of it as your data demands. AsterVec is
+  designed around disk: the index lives there, and memory holds only the
+  minimal part needed to navigate it. Set a memory budget and it holds,
+  at 100K vectors or at 10 million.
+- **Insert-friendly.** AsterVec assumes your data keeps growing. The
+  index absorbs new vectors as they arrive, updates and deletes
+  included, and never stops for a rebuild.
+- **Embeddable.** A thread-safe Python and C++ library that runs inside
+  your app, with no separate service to deploy. An HTTP server ships in
+  the box if you want one.
 
 ## Quick start
 
@@ -62,32 +64,39 @@ for h in hits:
 db.close()
 ```
 
-Your data stays live — no index rebuilds:
+The index takes inserts, updates and deletes in place. There is no
+rebuild step:
 
 ```python
-db.update(7, new_vector)          # document re-embedded? just update it
-db.delete(3)                      # real deletes — space is reclaimed
-db.bulk_build(embeddings)         # fast initial load (NumPy accepted)
+db.update(7, new_vector)          # replace a vector in place
+db.delete(3)                      # frees the space for reuse
+db.bulk_build(embeddings)         # fast initial load, NumPy accepted
 ```
 
-## Why AsterVec
+## Performance
 
-- 🪶 **Small memory, by design** — RAM holds only the navigation structure
-  and caches. You choose the memory budget, and it stays flat as your data
-  grows.
-- 🔁 **Live data** — insert, update, and delete without ever rebuilding.
-- 🏷️ **Filtered search** — attach JSON metadata, query it Mongo-style.
-- 🔌 **Runs inside your app** — a thread-safe Python/C++ library that needs
-  no separate service. An optional HTTP server is included for when you
-  want one.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/NTU-Siqiang-Group/AsterVec/main/docs/assets/perf-snapshot-dark.png">
+    <img src="https://raw.githubusercontent.com/NTU-Siqiang-Group/AsterVec/main/docs/assets/perf-snapshot-light.png" alt="AsterVec vs Chroma and LanceDB on SIFT-100K: 1.8 times less memory, 2.4 times more queries per second, 7.3 times more inserts per second, recall on par" width="880">
+  </picture>
+</p>
 
-|  | Search speed | Memory needed |
-|---|---|---|
-| In-memory graph index (HNSW libraries) | fast | grows with your data |
-| On-disk list index (IVF) | slower | small |
-| **AsterVec — graph index, on disk** | **graph-fast** | **small** |
+Measured on SIFT-100K, same machine, same HNSW parameters, default
+settings for every engine. Full results and methodology:
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## How it works
+
+At the heart of AsterVec is one architectural decision: **on disk, the
+graph and the vectors are stored separately**, because the two parts are
+updated and accessed in essentially different patterns.
+
+- **Graph** — edges churn in small, scattered writes, so they live in
+  [Aster](https://github.com/NTU-Siqiang-Group/Aster), a graph-oriented
+  LSM-tree that absorbs them out of place.
+- **Vectors** — they rarely change once written, so they live in packed
+  pages built for bulk reads.
 
 ```
 Your app's process
@@ -98,11 +107,12 @@ Your app's process
             └─ Vector store  — related vectors stored in nearby pages, compressed
 ```
 
-For example, when graph and vectors share one disk record, recording a
-single new edge can move about 8 KB of vector data that did not change.
-In AsterVec, that edge lands in the graph store alone. On the vector side,
-related vectors are packed onto the same pages, so one read serves many
-candidate evaluations.
+Keeping the two apart is what makes updates cheap. When graph and
+vectors share one disk record, recording a single new edge can move
+about 8 KB of vector data that did not change. In AsterVec, that edge
+lands in the graph store alone. On the vector side, related vectors are
+packed onto the same pages, so one read serves many candidate
+evaluations.
 
 ## Documentation
 
@@ -115,8 +125,8 @@ candidate evaluations.
 | Troubleshooting | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 | Build from source | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
-**Prefer a REST boundary?** `astervec_http` serves the same engine over
-HTTP — see [docs/HTTP_API.md](docs/HTTP_API.md).
+The optional `astervec_http` server exposes the same engine over HTTP.
+See [docs/HTTP_API.md](docs/HTTP_API.md).
 
 ## Contributing
 
