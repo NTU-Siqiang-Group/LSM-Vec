@@ -73,22 +73,20 @@ in memory is the next section.
 
 ## Memory
 
-Resident memory (RSS) of the whole process, measured while queries are
-running, at ef 128:
+Engine memory while serving queries, at ef 128, measured identically
+for every engine (the harness's own footprint is excluded on all
+sides):
 
 | | AsterVec | Chroma |
 |---|---:|---:|
-| SIFT-100K | 0.17 GB | 0.31 GB |
-| SIFT-1M | 0.78 GB | 1.71 GB |
-| GloVe-1.2M | 1.34 GB | 2.80 GB |
+| SIFT-100K | 0.12 GB | 0.26 GB |
+| SIFT-1M | 0.30 GB | 1.23 GB |
+| GloVe-1.2M | 0.46 GB | 1.92 GB |
 
-These numbers include the benchmark harness itself, which holds the
-dataset in memory in both processes, about 0.5 GB at SIFT-1M scale on
-each side. Subtract it and the engines alone stand at roughly 0.3 GB
-against 1.2 GB, a 4× gap, with the same ratio on GloVe. We checked that
-nothing hides outside these numbers: neither engine spawns child
-processes, uses shared memory, or touches swap. 97% of Chroma's memory
-is plain heap, which is what an index held in RAM looks like.
+We checked that nothing hides outside these numbers: neither engine
+spawns child processes, uses shared memory, or touches swap. 97% of
+Chroma's memory is plain heap, which is what an index held in RAM
+looks like.
 
 AsterVec reads vectors through the operating system's file cache, so
 its working data lives in memory the OS can hand to any other program
@@ -109,7 +107,7 @@ SIFT-1M, round 1 → round 10:
 | Recall@10 | 0.964 → 0.956 | 0.968 → 0.961 |
 | Insert, per op | 3.1 → 4.6 ms | 5.9 → 6.1 ms |
 | Search p50 | 1.4 → 2.0 ms | 0.7 → 0.7 ms |
-| RSS | 0.86 → 0.96 GB | 1.38 → 1.79 GB |
+| Engine memory | 0.38 → 0.48 GB | 0.90 → 1.31 GB |
 
 Both engines hold recall essentially flat through sustained mutation.
 AsterVec takes writes faster and its memory stays close to where it

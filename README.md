@@ -78,12 +78,24 @@ db.bulk_build(embeddings)         # fast initial load, NumPy accepted
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/NTU-Siqiang-Group/AsterVec/main/docs/assets/perf-snapshot-dark.png">
-    <img src="https://raw.githubusercontent.com/NTU-Siqiang-Group/AsterVec/main/docs/assets/perf-snapshot-light.png" alt="AsterVec vs Chroma and LanceDB on SIFT-100K: 1.8 times less memory, 2.4 times more queries per second, 7.3 times more inserts per second, recall on par" width="880">
+    <img src="https://raw.githubusercontent.com/NTU-Siqiang-Group/AsterVec/main/docs/assets/perf-snapshot-light.png" alt="AsterVec vs Chroma and LanceDB at 100K vectors: 2.2 times less memory, 5.2 times more queries per second, 7.3 times more inserts per second, recall on par" width="880">
   </picture>
 </p>
 
-Measured on SIFT-100K, same machine, same HNSW parameters, default
-settings for every engine. Full results and methodology:
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/NTU-Siqiang-Group/AsterVec/main/docs/assets/perf-snapshot-1m-dark.png">
+    <img src="https://raw.githubusercontent.com/NTU-Siqiang-Group/AsterVec/main/docs/assets/perf-snapshot-1m-light.png" alt="AsterVec vs Chroma at 1M vectors: 4.1 times less memory, faster inserts, recall on par, query speed comparable while serving from disk" width="880">
+  </picture>
+</p>
+
+Measured on SIFT at ef_search 32, same machine, same HNSW parameters,
+default settings for every engine. At 100K the working set is mostly
+cached, so AsterVec is effectively in memory too, and it compares well
+across the board. At 1M it is genuinely serving from disk. The memory gap widens there,
+and query speed stays roughly comparable. That is what the
+disk-oriented design is for: comparable performance while most of the
+index stays out of RAM. Full results and methodology:
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## How it works
