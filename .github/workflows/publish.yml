@@ -34,7 +34,7 @@ jobs:
           submodules: recursive
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.21
+        uses: pypa/cibuildwheel@v4.2.0
         env:
           CIBW_ARCHS: ${{ matrix.arch }}
 
@@ -42,8 +42,9 @@ jobs:
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
 
-          # AsterVec supports CPython 3.9+.
-          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-*"
+          # AsterVec supports CPython 3.9+. cp315 builds against the 3.15 RC
+          # ABI (frozen); free-threaded cp31Xt variants are not built.
+          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-* cp315-*"
           CIBW_SKIP: "*-musllinux*"
 
           # AsterVec 0.2.0 builds Aster zstd-only. Do not install/link snappy,

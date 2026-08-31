@@ -4,6 +4,22 @@ All notable changes to AsterVec are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - 2026-08-31
+
+Wheels-only release: Python 3.14 and 3.15 support. No engine changes.
+
+### Added
+- **Python 3.14 and 3.15 wheels** on all four platforms (Linux
+  x86_64/aarch64, macOS arm64/x86_64). The cp315 wheels are built against
+  the CPython 3.15 RC ABI and work with the 3.15.0 final release.
+  Free-threaded builds (`cp314t`/`cp315t`) are not yet provided; engine
+  thread-safety under no-GIL needs its own review first.
+
+### Changed
+- Bundled pybind11 bumped from 2.13.6 to 3.1.0 (required for CPython
+  3.14+); wheel pipeline moved from cibuildwheel 2.21 to 4.2.0. Python
+  3.9-3.13 wheels are unchanged in behavior.
+
 ## [0.2.1] - 2026-08-26
 
 Packaging, performance, and reliability release.
