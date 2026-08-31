@@ -17,7 +17,7 @@
 <p align="center">
   <a href="https://github.com/NTU-Siqiang-Group/AsterVec/actions/workflows/ci.yml"><img src="https://github.com/NTU-Siqiang-Group/AsterVec/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/aster-vec/"><img src="https://img.shields.io/pypi/v/aster-vec" alt="PyPI"></a>
-  <a href="https://pypi.org/project/aster-vec/"><img src="https://img.shields.io/pypi/pyversions/aster-vec" alt="Python versions"></a>
+  <a href="https://pypi.org/project/aster-vec/"><img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+"></a>
   <a href="https://github.com/NTU-Siqiang-Group/AsterVec/blob/main/LICENSE"><img src="https://img.shields.io/github/license/NTU-Siqiang-Group/AsterVec" alt="License"></a>
 </p>
 
